@@ -52,6 +52,26 @@ function unreachable(f: FloorPlan): string[] {
   return f.rooms.filter((r) => !seen.has(r.id) && !(OPEN.has(r.type) && r.type !== "balcony")).map((r) => r.label);
 }
 
+/** Doors that join a toilet / bathroom to a kitchen or pooja room. */
+function forbiddenDoors(f: FloorPlan): string[] {
+  const WET = new Set(["bathroom", "toilet"]);
+  const CLEAN = new Set(["kitchen", "pooja"]);
+  const roomAt = (x: number, y: number) =>
+    f.rooms.find((r) => x > r.x - E && x < r.x + r.w + E && y > r.y - E && y < r.y + r.h + E);
+  const out: string[] = [];
+  for (const d of f.doors) {
+    const v = d.orientation === "v";
+    const mx = v ? d.x : d.x + d.width / 2;
+    const my = v ? d.y + d.width / 2 : d.y;
+    const a = v ? roomAt(mx - 0.1, my) : roomAt(mx, my - 0.1);
+    const b = v ? roomAt(mx + 0.1, my) : roomAt(mx, my + 0.1);
+    if (a && b && ((WET.has(a.type) && CLEAN.has(b.type)) || (WET.has(b.type) && CLEAN.has(a.type)))) {
+      out.push(`${a.label} ↔ ${b.label}`);
+    }
+  }
+  return out;
+}
+
 function expectWellFormed(p: PlanResult) {
   const fp = p.footprint;
   for (const f of p.floors) {
@@ -67,6 +87,7 @@ function expectWellFormed(p: PlanResult) {
       }
     }
     expect(unreachable(f), `${f.name} unreachable rooms`).toEqual([]);
+    expect(forbiddenDoors(f), `${f.name} unhygienic doors`).toEqual([]);
   }
   if (p.floors.length > 1) {
     const stairs = p.floors.map((f) => f.rooms.find((r) => r.type === "stair")!);

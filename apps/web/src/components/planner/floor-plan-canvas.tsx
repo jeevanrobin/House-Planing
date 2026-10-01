@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { Undo2, Redo2, Maximize2 } from "lucide-react";
+import { useTheme } from "next-themes";
+import { furnish } from "@/lib/floorplan/furniture";
 import { placeOpenings } from "@/lib/floorplan/engine";
 import { generateWalls } from "@/lib/floorplan/walls";
 import { polygonBBox } from "@/lib/floorplan/polygon-ops";
@@ -10,27 +12,87 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const PAD = 2.2; // metres of margin around the plot
-const C = {
-  paper: "#F7F5EF",
-  ground: "#ECEADF",
-  plotLine: "#8A8475",
-  setback: "#B9B2A2",
+/** Drawing palettes: trace paper (light) and blueprint (dark). Concrete colours, so exports are self-contained. */
+const LIGHT = {
+  paper: "#F7F6F2",
+  sheet: "#FFFFFF",
+  ground: "#EEEDE6",
+  plotLine: "#8A8678",
+  setback: "#B7B3A6",
   room: "#FFFFFF",
-  wall: "#24221E",
-  railing: "#6F6A60",
-  ink: "#2E2B25",
-  inkSoft: "#7A7466",
-  inkFaint: "#A39D8F",
-  door: "#8C8578",
-  glass: "#5B8DB0",
-  grass: "#DDE8CF",
-  grassInk: "#9DB585",
-  water: "#CFE6F2",
-  waterInk: "#6FA3C2",
-  paving: "#EFEBE1",
-  tile: "#E9EEF1",
-  accent: "hsl(var(--primary))",
+  wall: "#1B1D22",
+  railing: "#5E626B",
+  ink: "#1B1D22",
+  inkSoft: "#5B606B",
+  inkFaint: "#9A9C9F",
+  furniture: "#666B74",
+  door: "#7D8189",
+  glass: "#2A4BD7",
+  grass: "#E3EBD7",
+  grassInk: "#97AE7E",
+  water: "#DCE9F7",
+  waterInk: "#5D86C4",
+  paving: "#F1EFE8",
+  pavingLine: "#DEDAD0",
+  tile: "#EEF1F4",
+  tileLine: "#D3D9E0",
+  deck: "#F3EEE4",
+  deckLine: "#E0D6C4",
+  accent: "#2A4BD7",
+  shadow: "rgba(0,0,0,0.07)",
 };
+type Palette = typeof LIGHT;
+const BLUEPRINT: Palette = {
+  paper: "#0F2240",
+  sheet: "#12284A",
+  ground: "#14294B",
+  plotLine: "#9DB4D6",
+  setback: "#4F6D99",
+  room: "#12284A",
+  wall: "#E8F0FB",
+  railing: "#B9CBE6",
+  ink: "#EAF1FB",
+  inkSoft: "#B4C6E0",
+  inkFaint: "#7F98BD",
+  furniture: "#93ABCF",
+  door: "#93ABCF",
+  glass: "#7CC4FF",
+  grass: "#163055",
+  grassInk: "#6E8FBF",
+  water: "#18355F",
+  waterInk: "#7CC4FF",
+  paving: "#13294C",
+  pavingLine: "#22406B",
+  tile: "#13294C",
+  tileLine: "#26466F",
+  deck: "#13294C",
+  deckLine: "#26466F",
+  accent: "#7CC4FF",
+  shadow: "rgba(0,0,0,0)",
+};
+const Pal = React.createContext<Palette>(LIGHT);
+
+/** Key to the drawing's fills, in the current theme's palette. */
+export function PlanLegend() {
+  const { resolvedTheme } = useTheme();
+  const C = resolvedTheme === "dark" ? BLUEPRINT : LIGHT;
+  const items: [string, string][] = [
+    ["Indoor", C.room], ["Wet areas", C.tile], ["Sit-out / balcony", C.deck],
+    ["Paving / terrace", C.paving], ["Garden", C.grass], ["Pool", C.water],
+  ];
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
+      {items.map(([l, c]) => (
+        <span key={l} className="flex items-center gap-1.5">
+          <span className="size-3 rounded-sm border" style={{ background: c }} /> {l}
+        </span>
+      ))}
+      <span className="flex items-center gap-1.5">
+        <span className="h-0 w-4 border-t border-dashed" style={{ borderColor: C.setback }} /> Setback line
+      </span>
+    </div>
+  );
+}
 
 const OPEN_ROOMS: RoomType[] = ["sitout", "balcony", "terrace", "parking"];
 const WET_ROOMS: RoomType[] = ["bathroom", "toilet", "utility"];
@@ -40,9 +102,17 @@ const ROOM_TYPES: RoomType[] = [
   "dress", "pooja", "office", "stair", "store", "utility", "corridor", "sitout", "balcony", "terrace",
 ];
 
+/** Title-block details printed on the drawing sheet. */
+export interface SheetMeta {
+  project: string;
+  subtitle: string;
+  date: string;
+}
+
 interface Props {
   floor: FloorPlan;
   site: SitePlan;
+  meta?: SheetMeta;
   /** "plan" frames the house; "site" shows the whole plot. */
   view?: "plan" | "site";
   editable?: boolean;
@@ -60,15 +130,20 @@ function ftIn(m: number): string {
   return `${Math.floor(totalIn / 12)}′${totalIn % 12}″`;
 }
 
-export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, className }: Props) {
+export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className }: Props) {
+  const { resolvedTheme } = useTheme();
+  const C = resolvedTheme === "dark" ? BLUEPRINT : LIGHT;
   const fp = floor.footprint;
   const isGround = floor.floor === 0;
   const bb = polygonBBox(site.plot);
-  const M = 3.4; // margin around the house in plan view (room for dimensions)
-  const vb = view === "site"
+  const M = 4.2; // margin around the house in plan view (room for dimension chains)
+  const area = view === "site"
     ? { x: bb.x - PAD, y: bb.y - PAD, w: bb.w + PAD * 2, h: bb.h + PAD * 2 }
     : { x: fp.x - M, y: fp.y - M, w: fp.w + M * 2, h: fp.h + M * 2 };
-  const s = Math.max(vb.w, vb.h) / 30; // marker scale relative to a 30 m drawing
+  const s = Math.max(area.w, area.h) / 30; // marker scale relative to a 30 m drawing
+  // The sheet adds a title strip under the drawing area.
+  const titleH = 2.6 * s;
+  const vb = { x: area.x, y: area.y, w: area.w, h: area.h + titleH };
 
   const [rooms, setRooms] = React.useState<Room[]>(floor.rooms);
   const [selected, setSelected] = React.useState<string | null>(null);
@@ -87,6 +162,11 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
   // Walls, doors and windows derive from the rooms, so edits stay consistent.
   const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide), [rooms, fp, floor.roadSide]);
   const walls = React.useMemo(() => generateWalls(rooms, fp), [rooms, fp]);
+  const furniture = React.useMemo(
+    () => rooms.flatMap((r) => furnish(r, openings.doors, openings.windows)),
+    [rooms, openings],
+  );
+  const chains = React.useMemo(() => dimensionChains(rooms, fp), [rooms, fp]);
 
   const commit = (next: Room[]) => {
     setPast((p) => [...p, rooms]);
@@ -191,15 +271,15 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
           <defs>
             <pattern id="fp-tile" width={0.3} height={0.3} patternUnits="userSpaceOnUse">
               <rect width={0.3} height={0.3} fill={C.tile} />
-              <path d="M 0.3 0 L 0 0 0 0.3" fill="none" stroke="#C9D3DA" strokeWidth={0.012} />
+              <path d="M 0.3 0 L 0 0 0 0.3" fill="none" stroke={C.tileLine} strokeWidth={0.012} />
             </pattern>
             <pattern id="fp-paving" width={0.6} height={0.6} patternUnits="userSpaceOnUse">
               <rect width={0.6} height={0.6} fill={C.paving} />
-              <path d="M 0.6 0 L 0 0 0 0.6" fill="none" stroke="#DCD5C5" strokeWidth={0.015} />
+              <path d="M 0.6 0 L 0 0 0 0.6" fill="none" stroke={C.pavingLine} strokeWidth={0.015} />
             </pattern>
             <pattern id="fp-deck" width={0.15} height={1} patternUnits="userSpaceOnUse">
-              <rect width={0.15} height={1} fill="#F1E9DA" />
-              <path d="M 0.15 0 L 0.15 1" stroke="#DCCDB3" strokeWidth={0.012} />
+              <rect width={0.15} height={1} fill={C.deck} />
+              <path d="M 0.15 0 L 0.15 1" stroke={C.deckLine} strokeWidth={0.012} />
             </pattern>
             <pattern id="fp-grass" width={0.8} height={0.8} patternUnits="userSpaceOnUse">
               <rect width={0.8} height={0.8} fill={C.grass} />
@@ -207,6 +287,7 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
             </pattern>
           </defs>
 
+          <Pal.Provider value={C}>
           <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={C.paper} />
 
           {/* Plot, setback line and road */}
@@ -240,7 +321,7 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
           </g>
 
           {/* House shadow */}
-          <rect x={fp.x + 0.12} y={fp.y + 0.18} width={fp.w} height={fp.h} fill="#000" opacity={0.08} />
+          <rect x={fp.x + 0.12} y={fp.y + 0.18} width={fp.w} height={fp.h} fill={C.shadow} />
 
           {/* Room floors */}
           {rooms.map((r) => {
@@ -270,6 +351,15 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
             ))}
           </g>
 
+          {/* Furniture */}
+          <g pointerEvents="none" fill={C.room} stroke={C.furniture} strokeWidth={0.035}>
+            {furniture.map((sh, i) => sh.kind === "rect"
+              ? <rect key={i} x={sh.x} y={sh.y} width={sh.w} height={sh.h} rx={sh.rx} />
+              : sh.kind === "circle"
+                ? <circle key={i} cx={sh.cx} cy={sh.cy} r={sh.r} />
+                : <line key={i} x1={sh.x1} y1={sh.y1} x2={sh.x2} y2={sh.y2} />)}
+          </g>
+
           {/* Walls */}
           {walls.map((w, i) => <WallLine key={`w-${i}`} w={w} />)}
 
@@ -288,7 +378,9 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
             const vertical = r.h > r.w * 1.8 && r.w < 1.7;
             return (
               <g key={`lbl-${r.id}`} pointerEvents="none" textAnchor="middle"
-                transform={vertical ? `rotate(-90 ${cx} ${cy})` : undefined}>
+                transform={vertical ? `rotate(-90 ${cx} ${cy})` : undefined}
+                // Paper-coloured halo keeps labels legible over furniture.
+                stroke={C.room} strokeWidth={0.09} strokeLinejoin="round" paintOrder="stroke">
                 <text x={cx} y={cy - (showDims ? fs * 0.55 : 0)} dominantBaseline="middle" fill={C.ink}
                   style={{ fontSize: fs, fontWeight: 650, letterSpacing: 0.01 }}>
                   {r.label.toUpperCase()}
@@ -309,9 +401,15 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
             );
           })}
 
-          {/* Overall dimensions */}
-          <DimLine x1={fp.x} y1={fp.y - 0.9} x2={fp.x + fp.w} y2={fp.y - 0.9} label={`${ftIn(fp.w)} (${fp.w.toFixed(2)} m)`} s={s} />
-          <DimLine x1={fp.x - 0.9} y1={fp.y} x2={fp.x - 0.9} y2={fp.y + fp.h} label={`${ftIn(fp.h)} (${fp.h.toFixed(2)} m)`} s={s} vertical />
+          {/* Dimension chains (room by room) and overall dimensions */}
+          {chains.top.map(([a, b], i) => (
+            <DimLine key={`dt-${i}`} x1={a} y1={fp.y - 1.0} x2={b} y2={fp.y - 1.0} label={b - a >= 1.1 ? ftIn(b - a) : ""} s={s} />
+          ))}
+          {chains.left.map(([a, b], i) => (
+            <DimLine key={`dl-${i}`} x1={fp.x - 1.0} y1={a} x2={fp.x - 1.0} y2={b} label={b - a >= 1.1 ? ftIn(b - a) : ""} s={s} vertical />
+          ))}
+          <DimLine x1={fp.x} y1={fp.y - 1.9} x2={fp.x + fp.w} y2={fp.y - 1.9} label={`${ftIn(fp.w)}  ·  ${fp.w.toFixed(2)} m`} s={s} strong />
+          <DimLine x1={fp.x - 1.9} y1={fp.y} x2={fp.x - 1.9} y2={fp.y + fp.h} label={`${ftIn(fp.h)}  ·  ${fp.h.toFixed(2)} m`} s={s} vertical strong />
 
           {/* Resize handle */}
           {editable && sel && (
@@ -322,17 +420,22 @@ export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, 
 
           {/* North arrow (north is always up) and scale bar */}
           <g transform={`translate(${vb.x + vb.w - 1.3 * s} ${vb.y + 1.4 * s}) scale(${s})`} pointerEvents="none">
-            <circle r={0.75} fill="#FFFFFF" stroke="#CFC8B8" strokeWidth={0.05} />
+            <circle r={0.75} fill={C.sheet} stroke={C.inkFaint} strokeWidth={0.05} />
             <path d="M 0 -0.58 L 0.24 0.3 L 0 0.12 L -0.24 0.3 Z" fill={C.ink} />
             <text y={-0.9} textAnchor="middle" style={{ fontSize: 0.36, fontWeight: 800 }} fill={C.ink}>N</text>
           </g>
           <g transform={`translate(${vb.x + 0.8 * s} ${vb.y + vb.h - 0.7 * s})`} pointerEvents="none" fill={C.inkSoft}>
             {[0, 1, 2, 3, 4].map((i) => (
-              <rect key={i} x={i} y={-0.12 * s} width={1} height={0.12 * s} fill={i % 2 ? "#FFFFFF" : C.inkSoft} stroke={C.inkSoft} strokeWidth={0.02 * s} />
+              <rect key={i} x={i} y={-0.12 * s} width={1} height={0.12 * s} fill={i % 2 ? C.sheet : C.inkSoft} stroke={C.inkSoft} strokeWidth={0.02 * s} />
             ))}
             <text x={0} y={-0.32 * s} style={{ fontSize: 0.3 * s, fontWeight: 600 }}>0</text>
             <text x={5} y={-0.32 * s} textAnchor="middle" style={{ fontSize: 0.3 * s, fontWeight: 600 }}>5 m</text>
           </g>
+
+          <TitleBlock x={vb.x} y={area.y + area.h} w={vb.w} h={titleH} s={s} meta={meta} floorName={floor.name} />
+          <rect x={vb.x + 0.25 * s} y={vb.y + 0.25 * s} width={vb.w - 0.5 * s} height={vb.h - 0.5 * s}
+            fill="none" stroke={C.ink} strokeWidth={0.05 * s} pointerEvents="none" />
+          </Pal.Provider>
         </svg>
       </div>
     </div>
@@ -357,6 +460,7 @@ function roadLabelPos(site: SitePlan, vb: { x: number; y: number; w: number; h: 
 }
 
 function WallLine({ w }: { w: Wall }) {
+  const C = React.useContext(Pal);
   if (w.type === "railing") {
     const off = 0.05;
     const v = w.orientation === "v";
@@ -382,6 +486,7 @@ function wallThicknessAt(o: { x: number; y: number; orientation: "h" | "v" }, wa
 }
 
 function DoorShape({ d, walls }: { d: Door; walls: Wall[] }) {
+  const C = React.useContext(Pal);
   const t = wallThicknessAt(d, walls) + 0.02;
   const v = d.orientation === "v";
   const w = d.width;
@@ -415,18 +520,19 @@ function DoorShape({ d, walls }: { d: Door; walls: Wall[] }) {
 }
 
 function WindowMarkShape({ w, walls }: { w: WindowMark; walls: Wall[] }) {
+  const C = React.useContext(Pal);
   const t = wallThicknessAt(w, walls);
   const v = w.orientation === "v";
   return (
     <g pointerEvents="none">
       {v ? (
         <>
-          <rect x={w.x - t / 2} y={w.y} width={t} height={w.width} fill="#FFFFFF" stroke={C.wall} strokeWidth={0.02} />
+          <rect x={w.x - t / 2} y={w.y} width={t} height={w.width} fill={C.room} stroke={C.wall} strokeWidth={0.02} />
           <line x1={w.x} y1={w.y} x2={w.x} y2={w.y + w.width} stroke={C.glass} strokeWidth={0.03} />
         </>
       ) : (
         <>
-          <rect x={w.x} y={w.y - t / 2} width={w.width} height={t} fill="#FFFFFF" stroke={C.wall} strokeWidth={0.02} />
+          <rect x={w.x} y={w.y - t / 2} width={w.width} height={t} fill={C.room} stroke={C.wall} strokeWidth={0.02} />
           <line x1={w.x} y1={w.y} x2={w.x + w.width} y2={w.y} stroke={C.glass} strokeWidth={0.03} />
         </>
       )}
@@ -435,6 +541,7 @@ function WindowMarkShape({ w, walls }: { w: WindowMark; walls: Wall[] }) {
 }
 
 function StairShape({ r }: { r: Room }) {
+  const C = React.useContext(Pal);
   // Dog-leg stair: two flights along the long side, a landing at the far end.
   const alongY = r.h >= r.w;
   const len = alongY ? r.h : r.w;
@@ -456,7 +563,7 @@ function StairShape({ r }: { r: Room }) {
     ? `M ${r.x + r.w * 0.25} ${r.y + r.h - 0.3} L ${r.x + r.w * 0.25} ${r.y + landing + 0.2}`
     : `M ${r.x + r.w - 0.3} ${r.y + r.h * 0.25} L ${r.x + landing + 0.2} ${r.y + r.h * 0.25}`;
   return (
-    <g stroke="#B5AE9F" strokeWidth={0.02}>
+    <g stroke={C.inkFaint} strokeWidth={0.02}>
       {lines}
       {mid}
       <path d={arrow} stroke={C.inkSoft} strokeWidth={0.035} markerEnd="" />
@@ -467,6 +574,7 @@ function StairShape({ r }: { r: Room }) {
 }
 
 function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const C = React.useContext(Pal);
   const vertical = h >= w;
   const cw = vertical ? Math.min(w * 0.72, 1.9) : Math.min(h * 0.72, 1.9);
   const cl = vertical ? Math.min(h * 0.82, 4.5) : Math.min(w * 0.82, 4.5);
@@ -476,17 +584,17 @@ function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }
   const bh = vertical ? cl : cw;
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} fill="url(#fp-paving)" stroke="#D2CABA" strokeWidth={0.03} />
-      <rect x={cx - bw / 2} y={cy - bh / 2} width={bw} height={bh} rx={0.45} fill="#FFFFFF" stroke="#9C9586" strokeWidth={0.04} />
+      <rect x={x} y={y} width={w} height={h} fill="url(#fp-paving)" stroke={C.pavingLine} strokeWidth={0.03} />
+      <rect x={cx - bw / 2} y={cy - bh / 2} width={bw} height={bh} rx={0.45} fill={C.room} stroke={C.furniture} strokeWidth={0.04} />
       {vertical ? (
         <>
-          <rect x={cx - bw / 2 + 0.2} y={cy - bh / 2 + bh * 0.24} width={bw - 0.4} height={bh * 0.18} rx={0.12} fill="#E5E1D8" />
-          <rect x={cx - bw / 2 + 0.2} y={cy + bh * 0.12} width={bw - 0.4} height={bh * 0.14} rx={0.12} fill="#E5E1D8" />
+          <rect x={cx - bw / 2 + 0.2} y={cy - bh / 2 + bh * 0.24} width={bw - 0.4} height={bh * 0.18} rx={0.12} fill={C.pavingLine} />
+          <rect x={cx - bw / 2 + 0.2} y={cy + bh * 0.12} width={bw - 0.4} height={bh * 0.14} rx={0.12} fill={C.pavingLine} />
         </>
       ) : (
         <>
-          <rect x={cx - bw / 2 + bw * 0.24} y={cy - bh / 2 + 0.2} width={bw * 0.18} height={bh - 0.4} rx={0.12} fill="#E5E1D8" />
-          <rect x={cx + bw * 0.12} y={cy - bh / 2 + 0.2} width={bw * 0.14} height={bh - 0.4} rx={0.12} fill="#E5E1D8" />
+          <rect x={cx - bw / 2 + bw * 0.24} y={cy - bh / 2 + 0.2} width={bw * 0.18} height={bh - 0.4} rx={0.12} fill={C.pavingLine} />
+          <rect x={cx + bw * 0.12} y={cy - bh / 2 + 0.2} width={bw * 0.14} height={bh - 0.4} rx={0.12} fill={C.pavingLine} />
         </>
       )}
     </g>
@@ -494,6 +602,7 @@ function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }
 }
 
 function GardenShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const C = React.useContext(Pal);
   // A few trees along the edges; deterministic positions.
   const trees: [number, number, number][] = [];
   const step = 4;
@@ -506,7 +615,7 @@ function GardenShape({ x, y, w, h }: { x: number; y: number; w: number; h: numbe
       <rect x={x} y={y} width={w} height={h} rx={0.3} fill="url(#fp-grass)" stroke={C.grassInk} strokeWidth={0.03} />
       {trees.slice(0, 14).map(([tx, ty, r], i) => (
         <g key={i}>
-          <circle cx={tx} cy={ty} r={r} fill="#C7DAB2" stroke={C.grassInk} strokeWidth={0.03} />
+          <circle cx={tx} cy={ty} r={r} fill={C.grass} stroke={C.grassInk} strokeWidth={0.03} />
           <circle cx={tx} cy={ty} r={0.08} fill={C.grassInk} />
         </g>
       ))}
@@ -515,38 +624,95 @@ function GardenShape({ x, y, w, h }: { x: number; y: number; w: number; h: numbe
 }
 
 function PoolShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const C = React.useContext(Pal);
   return (
     <g>
-      <rect x={x - 0.6} y={y - 0.6} width={w + 1.2} height={h + 1.2} rx={0.2} fill="url(#fp-paving)" stroke="#D2CABA" strokeWidth={0.03} />
+      <rect x={x - 0.6} y={y - 0.6} width={w + 1.2} height={h + 1.2} rx={0.2} fill="url(#fp-paving)" stroke={C.pavingLine} strokeWidth={0.03} />
       <rect x={x} y={y} width={w} height={h} rx={0.35} fill={C.water} stroke={C.waterInk} strokeWidth={0.08} />
       <path d={`M ${x + w * 0.2} ${y + h * 0.45} q ${w * 0.08} -0.15 ${w * 0.16} 0 t ${w * 0.16} 0`} fill="none" stroke={C.waterInk} strokeWidth={0.03} opacity={0.6} />
     </g>
   );
 }
 
-function DimLine({ x1, y1, x2, y2, label, vertical, s }: { x1: number; y1: number; x2: number; y2: number; label: string; vertical?: boolean; s: number }) {
-  const t = 0.18;
+function DimLine({ x1, y1, x2, y2, label, vertical, s, strong }: { x1: number; y1: number; x2: number; y2: number; label: string; vertical?: boolean; s: number; strong?: boolean }) {
+  const C = React.useContext(Pal);
+  const t = 0.12;
   const mx = (x1 + x2) / 2;
   const my = (y1 + y2) / 2;
+  const ext = 0.25; // extension past the ticks
   return (
-    <g stroke={C.inkSoft} strokeWidth={0.025} pointerEvents="none">
-      <line x1={x1} y1={y1} x2={x2} y2={y2} />
+    <g stroke={C.inkSoft} strokeWidth={strong ? 0.03 : 0.02} pointerEvents="none">
       {vertical ? (
         <>
-          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} />
-          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} />
+          <line x1={x1} y1={y1 - ext} x2={x2} y2={y2 + ext} />
+          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} strokeWidth={0.04} />
+          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} strokeWidth={0.04} />
         </>
       ) : (
         <>
-          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} />
-          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} />
+          <line x1={x1 - ext} y1={y1} x2={x2 + ext} y2={y2} />
+          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} strokeWidth={0.04} />
+          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} strokeWidth={0.04} />
         </>
       )}
-      <text x={mx} y={my - 0.18} textAnchor="middle" stroke="none" fill={C.inkSoft}
-        transform={vertical ? `rotate(-90 ${mx} ${my})` : undefined}
-        style={{ fontSize: Math.min(0.3, 0.3 * s), fontWeight: 600 }}>
-        {label}
-      </text>
+      {label && (
+        <text x={mx} y={my - 0.14} textAnchor="middle" stroke="none" fill={strong ? C.ink : C.inkSoft}
+          transform={vertical ? `rotate(-90 ${mx} ${my})` : undefined}
+          style={{ fontSize: Math.min(strong ? 0.3 : 0.24, 0.3 * s), fontWeight: strong ? 600 : 500, fontFamily: "var(--font-mono, ui-monospace)" }}>
+          {label}
+        </text>
+      )}
+    </g>
+  );
+}
+
+/** Room boundaries along the top and left outer walls, as [start, end] segments. */
+function dimensionChains(rooms: Room[], fp: { x: number; y: number; w: number; h: number }) {
+  const e = 0.02;
+  const cuts = (vals: number[], lo: number, hi: number) => {
+    const xs = [...new Set([lo, hi, ...vals].map((v) => Math.round(v * 100) / 100))].sort((a, b) => a - b);
+    return xs.slice(1).map((b, i) => [xs[i], b] as [number, number]).filter(([a, b]) => b - a > 0.3);
+  };
+  // Measure along the first row of indoor rooms (a full-width sit-out would hide the chain).
+  const indoor = rooms.filter((r) => !OPEN_ROOMS.includes(r.type));
+  const firstRow = indoor.length ? Math.min(...indoor.map((r) => r.y)) : fp.y;
+  const top = indoor.filter((r) => Math.abs(r.y - firstRow) < e).flatMap((r) => [r.x, r.x + r.w]);
+  const left = rooms.filter((r) => Math.abs(r.x - fp.x) < e).flatMap((r) => [r.y, r.y + r.h]);
+  return { top: cuts(top, fp.x, fp.x + fp.w), left: cuts(left, fp.y, fp.y + fp.h) };
+}
+
+function TitleBlock({ x, y, w, h, s, meta, floorName }: { x: number; y: number; w: number; h: number; s: number; meta?: SheetMeta; floorName: string }) {
+  const C = React.useContext(Pal);
+  const pad = 0.25 * s;
+  const top = y + 0.15 * s;
+  const cellH = h - pad - 0.15 * s;
+  const cols = [0.42, 0.24, 0.17, 0.17];
+  const label = { fontSize: 0.22 * s, fontWeight: 600, letterSpacing: 0.04 * s, fontFamily: "var(--font-mono, ui-monospace)" } as const;
+  const value = { fontSize: 0.4 * s, fontWeight: 600 } as const;
+  const cells: [string, string][] = [
+    ["Project", meta?.project ?? "Residence"],
+    ["Drawing", `${floorName} plan`],
+    ["Scale", "1:100"],
+    ["Date", meta?.date ?? ""],
+  ];
+  const inner = w - 2 * pad;
+  const starts = cols.map((_, i) => x + pad + inner * cols.slice(0, i).reduce((a, b) => a + b, 0));
+  return (
+    <g pointerEvents="none">
+      <rect x={x + pad} y={top} width={inner} height={cellH} fill={C.sheet} stroke={C.ink} strokeWidth={0.04 * s} />
+      {cells.map(([k, v], i) => (
+        <g key={k}>
+          {i > 0 && <line x1={starts[i]} y1={top} x2={starts[i]} y2={top + cellH} stroke={C.ink} strokeWidth={0.03 * s} />}
+          <text x={starts[i] + 0.3 * s} y={top + 0.55 * s} fill={C.inkSoft} style={label}>{k.toUpperCase()}</text>
+          <text x={starts[i] + 0.3 * s} y={top + 1.3 * s} fill={C.ink}
+            style={i === 0 ? { ...value, fontSize: 0.46 * s, fontWeight: 700 } : value}>{v}</text>
+          {i === 0 && meta?.subtitle && (
+            <text x={starts[i] + 0.3 * s} y={top + 1.85 * s} fill={C.inkSoft} style={{ fontSize: 0.26 * s, fontWeight: 500 }}>
+              {meta.subtitle}
+            </text>
+          )}
+        </g>
+      ))}
     </g>
   );
 }

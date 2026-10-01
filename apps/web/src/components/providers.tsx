@@ -14,8 +14,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
 
+  // Light (trace paper) is the house style; dark is the blueprint, by choice.
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </ThemeProvider>
   );
