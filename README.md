@@ -97,6 +97,16 @@ The differentiator. Given plot dimensions, facing and requirements it:
 It's implemented identically in TypeScript (`apps/web/src/lib/floorplan`) for instant
 client-side generation and in Python (`apps/api/app/services/floorplan.py`) for the API.
 
+**Keeping the two engines in sync.** The TypeScript engine is the source of truth.
+`fixtures/engine-parity/` holds shared input cases and the plans the TS engine produces
+for them; Vitest fails if the TS output changes and pytest fails if Python differs from it
+(beyond 1.5 mm). After an intentional engine change:
+
+```bash
+cd apps/web && npm run parity:update   # regenerate expected.json from the TS engine
+cd ../api && python -m pytest tests/test_engine_parity.py   # then port until this passes
+```
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design system, security,
 scaling strategy and AWS deployment.
 

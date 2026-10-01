@@ -75,6 +75,14 @@ def test_ai_generate_ok_when_authenticated(client):
     assert r.json()["floors"]
 
 
+def test_ai_suggestions_returns_engine_tips(client):
+    as_user()
+    r = client.post("/api/v1/ai/suggestions", json={"requirements": REQ})
+    assert r.status_code == 200
+    kinds = [t["kind"] for t in r.json()["suggestions"]]
+    assert {"ventilation", "vastu", "space", "cost"} <= set(kinds)
+
+
 def test_plot_polygon_size_is_bounded(client):
     as_user()
     huge = [[i % 10, i // 10] for i in range(101)]

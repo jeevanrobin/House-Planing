@@ -46,6 +46,12 @@ SWAPPABLE = {"kitchen", "dining", "living", "pooja", "store", "utility", "office
 EPS = 0.001
 
 
+def _js_round(v: float) -> int:
+    """JavaScript Math.round: halves round up. Python's round() rounds halves
+    to even, which drifts from the TS engine on exact ties (e.g. 2.5)."""
+    return math.floor(v + 0.5)
+
+
 @dataclass
 class Spec:
     type: str
@@ -65,8 +71,8 @@ def _layout_cardinal(f: str) -> str:
 def _direction_of(cx: float, cy: float, fp: Rect) -> str:
     dx = cx - (fp.x + fp.w / 2)
     dy = (fp.y + fp.h / 2) - cy
-    norm = (math.degrees(math.atan2(dx, dy)) + 360) % 360
-    return OCTANTS[round(norm / 45) % 8]
+    norm = (math.atan2(dx, dy) * 180 / math.pi + 360) % 360
+    return OCTANTS[_js_round(norm / 45) % 8]
 
 
 def _vastu_room_score(actual: str, ideal: str) -> float:
@@ -124,7 +130,7 @@ def _bathrooms_per_floor(total: int, floors: int, beds_per_floor: list[int]) -> 
     for f in range(floors):
         if remaining <= 0:
             break
-        share = round((remaining * beds_per_floor[f]) / total_beds)
+        share = _js_round((remaining * beds_per_floor[f]) / total_beds)
         add = min(share, remaining)
         out[f] += add
         remaining -= add
@@ -427,7 +433,7 @@ def _layout_floor(fp: Rect, clusters: list[dict], req: dict) -> list[dict]:
                 rooms.append({
                     "id": f"{sp.type}-{len(rooms)}", "type": sp.type, "label": sp.label,
                     "zone": sp.zone, "idealDir": IDEAL_DIRECTION.get(sp.type),
-                    "x": round(r.x, 3), "y": round(r.y, 3), "w": round(r.w, 3), "h": round(r.h, 3),
+                    "x": r.x, "y": r.y, "w": r.w, "h": r.h,
                 })
         cursor += band_depth
 
@@ -460,6 +466,7 @@ def _place_openings(rooms: list[dict], fp: Rect) -> tuple[list[dict], list[dict]
         mid = p0 + length / 2
         doors.append({
             "roomId": room["id"], "orientation": o, "width": round(dw, 3),
+            "exterior": room["type"] == "foyer",
             "x": round(at if o == "v" else mid - dw / 2, 3),
             "y": round(mid - dw / 2 if o == "v" else at, 3),
         })
@@ -496,7 +503,7 @@ def _generate_walls(rooms: list[dict], fp: Rect) -> list[dict]:
     def add(m, coord, a, b):
         if abs(b - a) < 0.04:
             return
-        m.setdefault(round(coord, 2), []).append((min(a, b), max(a, b)))
+        m.setdefault(_js_round(coord * 100) / 100, []).append((min(a, b), max(a, b)))
 
     for r in rooms:
         add(verticals, r["x"], r["y"], r["y"] + r["h"])
@@ -510,13 +517,13 @@ def _generate_walls(rooms: list[dict], fp: Rect) -> list[dict]:
 
     walls = []
     for x, ivs in verticals.items():
-        ext = _on_boundary(x, fp.x) or _on_boundary(x, fp.x + fp.w)
+        ext = abs(x - fp.x) < 0.04 or abs(x - (fp.x + fp.w)) < 0.04
         for a, b in _merge(ivs):
             walls.append({"x1": x, "y1": round(a, 3), "x2": x, "y2": round(b, 3),
                           "orientation": "v", "type": "exterior" if ext else "interior",
                           "thickness": 0.66 if ext else 0.46})
     for y, ivs in horizontals.items():
-        ext = _on_boundary(y, fp.y) or _on_boundary(y, fp.y + fp.h)
+        ext = abs(y - fp.y) < 0.04 or abs(y - (fp.y + fp.h)) < 0.04
         for a, b in _merge(ivs):
             walls.append({"x1": round(a, 3), "y1": y, "x2": round(b, 3), "y2": y,
                           "orientation": "h", "type": "exterior" if ext else "interior",
@@ -576,10 +583,10 @@ def _layout_floor_poly(
                     "label": spec.label,
                     "zone": spec.zone,
                     "idealDir": IDEAL_DIRECTION.get(spec.type),
-                    "x": round(bbox.x, 3),
-                    "y": round(bbox.y, 3),
-                    "w": round(bbox.w, 3),
-                    "h": round(bbox.h, 3),
+                    "x": bbox.x,
+                    "y": bbox.y,
+                    "w": bbox.w,
+                    "h": bbox.h,
                     "polygon": c_poly,
                 })
             else:
@@ -597,10 +604,10 @@ def _layout_floor_poly(
                         "label": spec.label,
                         "zone": spec.zone,
                         "idealDir": IDEAL_DIRECTION.get(spec.type),
-                        "x": round(bbox.x, 3),
-                        "y": round(bbox.y, 3),
-                        "w": round(bbox.w, 3),
-                        "h": round(bbox.h, 3),
+                        "x": bbox.x,
+                        "y": bbox.y,
+                        "w": bbox.w,
+                        "h": bbox.h,
                         "polygon": sp,
                     })
 
@@ -672,10 +679,10 @@ def _generate_polygon_walls(
     interior_t = 0.46
 
     def seg_key(x1: float, y1: float, x2: float, y2: float) -> str:
-        k1 = round(x1 * 100)
-        k2 = round(y1 * 100)
-        k3 = round(x2 * 100)
-        k4 = round(y2 * 100)
+        k1 = _js_round(x1 * 100)
+        k2 = _js_round(y1 * 100)
+        k3 = _js_round(x2 * 100)
+        k4 = _js_round(y2 * 100)
         if k1 < k3 or (k1 == k3 and k2 < k4):
             return f"{k1},{k2}-{k3},{k4}"
         return f"{k3},{k4}-{k1},{k2}"
@@ -727,10 +734,10 @@ def _floor_metrics_poly(
         perimeter += math.hypot(x2 - x1, y2 - y1)
 
     return {
-        "builtUpArea": round(built_up_area, 2),
-        "carpetArea": round(built_up_area * efficiency, 2),
-        "efficiency": round(efficiency, 3),
-        "perimeter": round(perimeter, 2),
+        "builtUpArea": built_up_area,
+        "carpetArea": built_up_area * efficiency,
+        "efficiency": efficiency,
+        "perimeter": perimeter,
         "vastuScore": _vastu(rooms, fp_bbox),
     }
 
@@ -739,7 +746,7 @@ def _vastu(rooms: list[dict], fp: Rect) -> int:
     scored = [r for r in rooms if r.get("idealDir")]
     if not scored:
         return 100
-    return round(sum(_room_vastu(r, fp) for r in scored) / len(scored) * 100)
+    return _js_round(sum(_room_vastu(r, fp) for r in scored) / len(scored) * 100)
 
 
 M_TO_FT = 3.28084
@@ -798,7 +805,7 @@ def validate_plan_requirements(plan: dict, req: dict) -> dict:
             area = room["w"] * room["h"]
             min_area = MIN_ROOM_AREA.get(room["type"], 2.0)
             if area < min_area:
-                errors.append(f"{room['label']} is too small ({area:.1f} m², minimum is {min_area} m²).")
+                errors.append(f"{room['label']} is too small ({area:.1f} m², minimum is {min_area:g} m²).")
 
     if bedroom_count != req["bedrooms"]:
         errors.append(f"Expected {req['bedrooms']} bedrooms, but generated {bedroom_count}.")
@@ -852,11 +859,11 @@ def generate_plan(req: dict) -> dict[str, Any]:
                 "metrics": _floor_metrics_poly(rooms, fp_poly, fp_bbox),
             })
 
-        avg_vastu = round(sum(f["metrics"]["vastuScore"] for f in floors) / len(floors))
+        avg_vastu = _js_round(sum(f["metrics"]["vastuScore"] for f in floors) / len(floors))
         total_built = sum(f["metrics"]["builtUpArea"] for f in floors)
 
         result = {
-            "plotArea": round(plot_area, 2),
+            "plotArea": plot_area,
             "plotPolygon": plot_poly,
             "footprint": fp_bbox.to_dict(),
             "setback": sb,
@@ -867,6 +874,7 @@ def generate_plan(req: dict) -> dict[str, Any]:
                 "floors": len(floors)
             },
         }
+        result["suggestions"] = _build_suggestions(result, req)
         result["validation"] = validate_plan_requirements(result, req)
         return result
 
@@ -886,13 +894,13 @@ def generate_plan(req: dict) -> dict[str, Any]:
             "footprint": asdict(fp), "rooms": rooms, "doors": doors,
             "windows": windows, "walls": walls,
             "metrics": {
-                "builtUpArea": round(built, 2), "carpetArea": round(built * eff, 2),
-                "efficiency": round(eff, 3), "perimeter": round(2 * (fp.w + fp.h), 2),
+                "builtUpArea": built, "carpetArea": built * eff,
+                "efficiency": eff, "perimeter": 2 * (fp.w + fp.h),
                 "vastuScore": _vastu(rooms, fp),
             },
         })
 
-    avg_vastu = round(sum(f["metrics"]["vastuScore"] for f in floors) / len(floors))
+    avg_vastu = _js_round(sum(f["metrics"]["vastuScore"] for f in floors) / len(floors))
     total_built = sum(f["metrics"]["builtUpArea"] for f in floors)
     result = {
         "plotArea": round(req["plotWidth"] * req["plotDepth"], 2),
@@ -900,8 +908,79 @@ def generate_plan(req: dict) -> dict[str, Any]:
         "summary": {"vastuScore": avg_vastu, "builtUpArea": round(total_built, 2),
                      "floors": len(floors)},
     }
+    result["suggestions"] = _build_suggestions(result, req)
     result["validation"] = validate_plan_requirements(result, req)
     return result
+
+
+_COST_RATE = {"economy": 1400, "standard": 1900, "premium": 2600, "luxury": 3600}
+
+
+def _inr(n: float) -> str:
+    """Format like JS toLocaleString("en-IN", {maximumFractionDigits: 0}): 12,34,567."""
+    digits = str(_js_round(n))
+    head, tail = digits[:-3], digits[-3:]
+    groups = []
+    while len(head) > 2:
+        groups.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        groups.insert(0, head)
+    return ",".join(groups + [tail])
+
+
+def _build_suggestions(plan: dict, req: dict) -> list[dict]:
+    """Port of buildSuggestions in apps/web/src/lib/floorplan/engine.ts."""
+    out: list[dict] = []
+    fp = plan["footprint"]
+    right, bottom = fp["x"] + fp["w"], fp["y"] + fp["h"]
+    blind = 0
+    for f in plan["floors"]:
+        for r in f["rooms"]:
+            if r["type"] in ("bedroom", "master_bedroom"):
+                has_ext = (_on_boundary(r["x"], fp["x"]) or _on_boundary(r["x"] + r["w"], right)
+                           or _on_boundary(r["y"], fp["y"]) or _on_boundary(r["y"] + r["h"], bottom))
+                if not has_ext:
+                    blind += 1
+    out.append(
+        {"kind": "ventilation", "severity": "good",
+         "message": "Every bedroom has at least one external wall for cross-ventilation and daylight."}
+        if blind == 0 else
+        {"kind": "ventilation", "severity": "warn",
+         "message": f"{blind} bedroom(s) are landlocked — consider a light shaft or rearranging to an outer wall."}
+    )
+
+    floors = plan["floors"]
+    avg = _js_round(sum(f["metrics"]["vastuScore"] for f in floors) / len(floors))
+    out.append({
+        "kind": "vastu",
+        "severity": "good" if avg >= 75 else "info" if avg >= 55 else "warn",
+        "message": f"Vastu compliance score: {avg}/100"
+                   + (" — strong alignment with directional principles." if avg >= 75
+                      else " — kitchen/master placement could be tuned for a higher score."),
+    })
+
+    total_area = sum(f["metrics"]["builtUpArea"] for f in floors)
+    eff = floors[0]["metrics"]["efficiency"]
+    out.append({
+        "kind": "space",
+        "severity": "good" if eff >= 0.85 else "info",
+        "message": f"Carpet-area efficiency ≈ {_js_round(eff * 100)}%. "
+                   f"Built-up {_js_round(total_area)} m² across {len(floors)} floor(s).",
+    })
+
+    if req["floors"] > 1:
+        out.append({"kind": "circulation", "severity": "info",
+                    "message": "Staircase is stacked vertically across floors for an efficient structural core."})
+
+    rate = _COST_RATE[req["budget"]]
+    out.append({
+        "kind": "cost",
+        "severity": "info",
+        "message": f"Indicative construction estimate ≈ ₹{_inr(total_area * 10.7639 * rate)} "
+                   f"at {req['budget']} finish (≈₹{rate}/ft²).",
+    })
+    return out
 
 
 def to_flat(floor: dict) -> dict:
