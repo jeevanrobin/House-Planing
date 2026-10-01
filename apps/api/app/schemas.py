@@ -26,7 +26,11 @@ class OtpVerifyIn(BaseModel):
 
 
 class GoogleIn(BaseModel):
-    id_token: str
+    id_token: str = Field(min_length=1, max_length=4096)
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
 
 
 class TokenOut(BaseModel):

@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # Email (OTP delivery). With SMTP_HOST unset, dev logs codes to the console
+    # and production refuses to issue codes rather than pretending to send them.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "AI Plot Planner <no-reply@localhost>"
+    SMTP_STARTTLS: bool = True
+
     # Rate limiting
     RATE_LIMIT: str = "120/minute"
 
