@@ -167,6 +167,26 @@ export function RequirementWizard({
                   options={FACINGS.map((f) => ({ label: f, value: f }))} />
               </Field>
               <Stepper label="Number of floors" value={req.floors} min={1} max={4} onChange={(v) => set("floors", v)} />
+              {req.plotPolygon && (
+                <Field label="How much of the plot should the house use?">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {([
+                      ["max", "Maximise the plot", "A larger home that follows your plot's shape (about 60% coverage)."],
+                      ["balanced", "Balanced", "A compact home with open garden around it."],
+                    ] as const).map(([v, title, desc]) => {
+                      const active = (req.plotUse ?? "max") === v;
+                      return (
+                        <button key={v} type="button" onClick={() => set("plotUse", v)} aria-pressed={active}
+                          className={cn("rounded-md border p-3 text-left transition-colors",
+                            active ? "border-primary bg-accent text-accent-foreground" : "hover:bg-secondary")}>
+                          <span className="block text-sm font-semibold">{title}</span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">{desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              )}
             </div>
           )}
 

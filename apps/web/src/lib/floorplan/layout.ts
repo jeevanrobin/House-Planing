@@ -110,7 +110,7 @@ function columnWidths(cols: Column[], d: number, avail: number): number[] {
 }
 
 /** Lay out one band at depth `d` starting at y. */
-export function layoutBand(band: Band, y: number, d: number, W: number, reversed: boolean): Placed[] {
+export function layoutBand(band: Band, y: number, d: number, W: number, reversed: boolean, x0 = 0): Placed[] {
   if (!band.units.length || d <= 0) return [];
   const cols = orderUnits(band.units, reversed).flatMap((u) => u.cols);
   const fixedTotal = cols.reduce((a, c) => a + (c.fixedW ?? 0), 0);
@@ -122,7 +122,7 @@ export function layoutBand(band: Band, y: number, d: number, W: number, reversed
   cols.forEach((c, idx) => {
     let w = c.fixedW !== undefined ? c.fixedW : flexW[fi++];
     if (idx === cols.length - 1) w = W - x; // absorb rounding
-    out.push(...stackColumn(c, x, y, w, d, !!band.corridorBehind));
+    out.push(...stackColumn(c, x0 + x, y, w, d, !!band.corridorBehind));
     x += w;
   });
   return out;
@@ -243,8 +243,16 @@ function corridorSpec(): RoomSpec {
 }
 
 /** Assign depths so bands fill exactly `D`; flexible bands grow/shrink first. */
-export function fitDepths(bands: Band[], W: number, D: number, frozen = 0): number[] {
-  const depths = bands.map((b) => targetDepth(b, W));
+/** A band's horizontal extent: start x and width (house-local metres). */
+export interface Extent {
+  x0: number;
+  w: number;
+}
+
+const widthOf = (W: number | Extent[], i: number) => (typeof W === "number" ? W : W[i].w);
+
+export function fitDepths(bands: Band[], W: number | Extent[], D: number, frozen = 0): number[] {
+  const depths = bands.map((b, i) => targetDepth(b, widthOf(W, i)));
   const flexIdx = bands.map((b, i) => i).filter((i) => i >= frozen && bands[i].fixedD === undefined && bands[i].units.length);
   let delta = D - depths.reduce((a, b) => a + b, 0);
   if (Math.abs(delta) < 1e-9 || !flexIdx.length) return depths;
@@ -273,12 +281,14 @@ export function fitDepths(bands: Band[], W: number, D: number, frozen = 0): numb
   return depths;
 }
 
-export function layoutBands(bands: Band[], depths: number[], W: number, reversed: (b: Band, i: number) => boolean): { rooms: Placed[]; slots: BandSlot[] } {
+/** Lay bands out top to bottom; with extents, each band can have its own width and offset. */
+export function layoutBands(bands: Band[], depths: number[], W: number | Extent[], reversed: (b: Band, i: number) => boolean): { rooms: Placed[]; slots: BandSlot[] } {
   const rooms: Placed[] = [];
   const slots: BandSlot[] = [];
   let y = 0;
   bands.forEach((b, i) => {
-    rooms.push(...layoutBand(b, y, depths[i], W, reversed(b, i)));
+    const ext = typeof W === "number" ? { x0: 0, w: W } : W[i];
+    rooms.push(...layoutBand(b, y, depths[i], ext.w, reversed(b, i), ext.x0));
     slots.push({ band: b, y, d: depths[i] });
     y += depths[i];
   });

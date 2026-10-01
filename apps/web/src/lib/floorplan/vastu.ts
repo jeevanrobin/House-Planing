@@ -19,12 +19,14 @@ export const IDEAL_DIRECTION: Partial<Record<RoomType, Facing>> = {
 };
 
 /** 8-way compass direction of a point relative to the footprint centre. */
-export function directionOf(cx: number, cy: number, fp: Rect): Facing {
+export function directionOf(cx: number, cy: number, fp: Rect, northDeg = 0): Facing {
   const dx = cx - (fp.x + fp.w / 2);
   // screen y grows south, so invert for a true compass bearing
   const dy = (fp.y + fp.h / 2) - cy;
-  const angle = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = North, 90 = East
-  const norm = (angle + 360) % 360;
+  const angle = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = sheet-up, 90 = sheet-right
+  // The sheet may be turned to square the road frontage; true north is
+  // `northDeg` clockwise from sheet-up.
+  const norm = (angle - northDeg + 720) % 360;
   const idx = Math.round(norm / 45) % 8;
   return OCTANTS[idx];
 }
