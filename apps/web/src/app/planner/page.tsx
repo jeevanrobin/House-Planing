@@ -4,8 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  Download, FileImage, FileCode2, Pencil, RotateCcw, Gauge,
-  Compass as CompassIcon, Wind, IndianRupee, Sparkles, CheckCircle2, AlertTriangle, Info,
+  Download, FileImage, FileCode2, Pencil, RotateCcw,
+  Sparkles, CheckCircle2, AlertTriangle, Info,
   MapPin, PencilRuler, ArrowLeft,
 } from "lucide-react";
 import { RequirementWizard } from "@/components/planner/wizard";
@@ -21,7 +21,6 @@ import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types
 
 type Stage = "choose" | "plot" | "requirements" | "result";
 
-const SUG_ICON = { ventilation: Wind, vastu: CompassIcon, space: Gauge, cost: IndianRupee, circulation: RotateCcw } as const;
 const SEV_STYLE = {
   good: "text-emerald-500", info: "text-sky-500", warn: "text-amber-500",
 } as const;

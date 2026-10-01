@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { generatePlan } from "./engine";
 import { toFloorPlanJSON } from "./serialize";
 import type { Polygon, Rect, Requirements, Room } from "./types";
-import { pointInPolygon, polygonBBox } from "./polygon-ops";
 
 const REQ: Requirements = {
   plotWidth: 12, plotDepth: 18, facing: "N", floors: 2,

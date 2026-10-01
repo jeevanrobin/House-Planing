@@ -5,13 +5,9 @@ import {
   insetPolygon,
   polygonArea,
   polygonBBox,
-  polygonCentroid,
-  rectToPolygon,
   subdividePolygon,
-  clipPolygon,
   edgeOnBoundary,
   polygonEdges,
-  type PolyEdge,
 } from "./polygon-ops";
 import type {
   Door,
@@ -423,8 +419,6 @@ function layoutFloorPoly(
   const fpBBox = polygonBBox(fpPoly);
   const card = layoutCardinal(req.facing);
   const horizontal = card === "E" || card === "W";
-  // For polygon mode the "cross" and "depth" come from the polygon's bbox.
-  const crossLen = horizontal ? fpBBox.h : fpBBox.w;
 
   const byZone = new Map<Zone, Cluster[]>();
   for (const c of clusters) (byZone.get(c.zone) ?? byZone.set(c.zone, []).get(c.zone)!).push(c);
