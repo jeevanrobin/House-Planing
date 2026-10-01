@@ -246,7 +246,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           <Button size="sm" variant="outline" onClick={undo} disabled={!past.length}><Undo2 /> Undo</Button>
           <Button size="sm" variant="outline" onClick={redo} disabled={!future.length}><Redo2 /> Redo</Button>
           {sel && (
-            <div className="flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-sm">
+            <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm">
               <Maximize2 className="size-4 text-muted-foreground" />
               <select value={sel.type} onChange={(e) => changeType(sel.id, e.target.value as RoomType)}
                 className="rounded-md border bg-background px-2 py-1 text-sm capitalize">
@@ -258,7 +258,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
         </div>
       )}
 
-      <div className="overflow-hidden rounded-2xl border shadow-sm">
+      <div className="overflow-hidden rounded-lg border shadow-sm">
         <svg
           ref={svgRef}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}

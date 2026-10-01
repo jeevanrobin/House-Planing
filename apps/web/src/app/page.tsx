@@ -1,261 +1,203 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
-import {
-  MapPin, Sparkles, Ruler, Compass, Wind,
-  FileDown, ArrowRight, Check, Building2, Home, HardHat,
-} from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { ArrowRight, Check, ChevronDown } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { FloorPlanCanvas } from "@/components/planner/floor-plan-canvas";
+import { generatePlan } from "@/lib/floorplan/engine";
+import type { Requirements } from "@/lib/floorplan/types";
 
-const fadeUp = {
-  initial: { opacity: 0, y: 24 },
-  whileInView: { opacity: 1, y: 0 },
-  viewport: { once: true, margin: "-80px" },
-  transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] as const },
+/** The plan in the hero is generated live by the same engine users get. */
+const SAMPLE: Requirements = {
+  plotWidth: 12, plotDepth: 18, facing: "E", floors: 2, bedrooms: 3, bathrooms: 3, parking: 1,
+  balconies: 1, vastu: true, garden: false, pool: false, homeOffice: false,
+  budget: "standard", style: "modern", luxury: 3,
 };
 
-const FEATURES = [
-  { icon: MapPin, title: "Map-based plot selection", desc: "Draw your boundary on satellite imagery and get instant area, perimeter and orientation." },
-  { icon: Sparkles, title: "AI planning engine", desc: "Intelligent room allocation, circulation and space optimisation in seconds." },
-  { icon: Compass, title: "Vastu intelligence", desc: "Directional scoring and recommendations baked into every generated layout." },
-  { icon: Ruler, title: "Dimensioned 2D plans", desc: "Walls, doors, windows, labels, areas, scale bar and compass — print ready." },
-  { icon: Wind, title: "Ventilation analysis", desc: "Every plan is checked for daylight and cross-ventilation on habitable rooms." },
-  { icon: FileDown, title: "Pro exports", desc: "Export to PNG, SVG and CAD-compatible DXF for your architect or builder." },
+const STEPS = [
+  { title: "Draw your plot", body: "Trace the boundary on satellite imagery. Area, frontage, depth and facing are measured as you draw — any shape, not just rectangles." },
+  { title: "Describe your home", body: "Floors, bedrooms and baths, parking, balconies, Vastu, garden or pool, and how much of the plot to build on." },
+  { title: "Get a buildable plan", body: "A furnished, dimensioned plan that follows your land, with a site plan, a 3D model and a Vastu score — in under a second." },
 ];
 
-const AUDIENCE = [
-  { icon: Home, title: "Homeowners", desc: "Visualise your dream home before spending on an architect." },
-  { icon: HardHat, title: "Builders", desc: "Generate sellable layout options for any plot in minutes." },
-  { icon: Building2, title: "Architects & developers", desc: "Rapid concept iterations and client-ready presentations." },
-];
-
-const PRICING = [
-  { name: "Free", price: "₹0", period: "forever", features: ["3 projects", "Basic 2D plans", "PNG export", "Vastu score"], cta: "Start free", highlight: false },
-  { name: "Pro", price: "₹999", period: "/month", features: ["Unlimited projects", "Advanced AI planning", "SVG + DXF export", "Version history", "Priority generation"], cta: "Go Pro", highlight: true },
-  { name: "Enterprise", price: "Custom", period: "", features: ["Team collaboration", "Architect toolkit", "API access", "SSO & audit logs", "Dedicated support"], cta: "Contact sales", highlight: false },
-];
+const INCLUDED = [
+  ["Follows your plot's shape", "Squares up with the road frontage and steps with an irregular boundary."],
+  ["Real house structure", "Sit-out, living, kitchen and dining, hallway and bedrooms with attached baths — every room reachable."],
+  ["Vastu against true north", "Room directions are scored with the compass, even when the plot is skewed."],
+  ["Architect's drawing sheet", "230 mm walls, door swings, windows, furniture, dimension chains and a title block."],
+  ["Site plan", "Setbacks, parking or a car porch, garden and pool placed on the open land."],
+  ["3D model", "Orbit the house floor by floor, with the roof on or off."],
+  ["Editable", "Drag, resize and retype rooms; walls, doors and windows follow."],
+  ["Saved to your account", "Projects, plots and plans kept privately in your account."],
+] as const;
 
 const FAQ = [
-  { q: "Do I need a Google Maps API key?", a: "Only for the live map plot-selection module. The AI planner and 2D generator work fully offline without any key." },
-  { q: "How accurate are the Vastu recommendations?", a: "We score each room against classical directional principles and surface concrete suggestions — it's guidance, not a substitute for a consultant." },
-  { q: "Can I edit the generated plan?", a: "Yes. The interactive editor lets you drag, resize and retype rooms, with full undo/redo, then re-export." },
-  { q: "Is this a replacement for an architect?", a: "It's a powerful concept and iteration tool. Final construction drawings should always be validated by a licensed professional." },
-];
-
-const TESTIMONIALS = [
-  { name: "Aarav Mehta", role: "Homeowner, Pune", quote: "I had three plan options for my 1,800 sq ft plot before my morning coffee. Incredible." },
-  { name: "Studio Verde", role: "Architecture firm", quote: "We use it for first-pass concepts in client meetings. Cuts days off our early design." },
-  { name: "Ravi Kumar", role: "Builder, Hyderabad", quote: "Generating layouts per plot used to need a draftsman. Now it's instant and looks premium." },
+  { q: "Is this a replacement for an architect?", a: "No. It gives you a strong, realistic starting point in seconds — a plan to discuss, compare and refine. Construction drawings, structure and approvals still need a licensed professional." },
+  { q: "My plot isn't a rectangle. Will it work?", a: "Yes. Draw the real boundary on the map; the house is oriented to the road and its outline steps with the land. Choose “Maximise the plot” for a larger home that follows the shape, or “Balanced” for a compact house with garden around it." },
+  { q: "How is Vastu handled?", a: "Each room has a preferred direction (kitchen south-east, master bedroom south-west, pooja north-east…). The engine tries mirrored and reordered layouts and keeps the best score, measured against true north. It's guidance, not a ruling." },
+  { q: "Do I need an account?", a: "No — you can generate and explore plans right away. Sign in to save projects and plans and come back to them." },
+  { q: "What does it cost?", a: "Everything on this page is free while we're in early access. A Pro plan with PDF and CAD export and photoreal renders is in the works." },
 ];
 
 export default function Landing() {
+  const reduce = useReducedMotion();
+  const sample = React.useMemo(() => generatePlan(SAMPLE), []);
+  const rise = (delay = 0) => reduce ? {} : {
+    initial: { opacity: 0, y: 16 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.7, delay, ease: [0.16, 1, 0.3, 1] as const },
+  };
+
   return (
-    <div className="relative min-h-dvh overflow-hidden">
+    <div className="min-h-dvh">
       <SiteHeader />
 
-      {/* Hero */}
-      <section className="relative">
-        <div className="absolute inset-0 -z-10 spotlight" />
-        <div className="absolute inset-0 -z-10 bg-grid [mask-image:radial-gradient(60%_50%_at_50%_0%,black,transparent)]" />
-        <div className="container flex flex-col items-center pb-20 pt-16 text-center sm:pt-24">
-          <motion.div {...fadeUp}>
-            <Badge className="mb-5 px-4 py-1.5 text-sm"><Sparkles className="size-3.5" /> AI-generated house plans from a map</Badge>
-          </motion.div>
-          <motion.h1 {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.05 }}
-            className="max-w-4xl font-display text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl">
-            Design your home from a{" "}
-            <span className="text-brand-gradient">plot on the map</span>.
-          </motion.h1>
-          <motion.p {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.1 }}
-            className="mt-6 max-w-2xl text-lg text-muted-foreground">
-            Select your plot, share your requirements, and let our AI engine generate intelligent,
-            Vastu-aware 2D floor plans — complete with dimensions, ventilation analysis and pro exports.
-          </motion.p>
-          <motion.div {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.15 }}
-            className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg">
-              <Link href="/planner">Generate a plan free <ArrowRight /></Link>
-            </Button>
-            <Button asChild size="lg" variant="glass">
-              <Link href="#features">See how it works</Link>
-            </Button>
-          </motion.div>
+      {/* Hero: the product's own output is the headline image. */}
+      <section className="relative border-b bg-grid">
+        <div className="container grid items-center gap-10 py-14 lg:grid-cols-[1fr_1.15fr] lg:py-20">
+          <div>
+            <motion.p {...rise()} className="label-mono">House plans from the land up</motion.p>
+            <motion.h1 {...rise(0.05)}
+              className="mt-4 font-display text-[2.6rem] font-extrabold leading-[1.02] tracking-tight sm:text-6xl"
+              style={{ fontVariationSettings: '"wdth" 118' }}>
+              Draw your plot.<br />
+              Get a house that <span className="text-primary">fits it.</span>
+            </motion.h1>
+            <motion.p {...rise(0.1)} className="mt-5 max-w-xl text-lg text-muted-foreground">
+              Trace your land on the map and describe the home you want. In under a second you get a furnished,
+              dimensioned, Vastu-scored plan that follows your plot&apos;s real shape — with a site plan and a 3D model.
+            </motion.p>
+            <motion.div {...rise(0.15)} className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button asChild size="lg"><Link href="/planner">Plan my house <ArrowRight /></Link></Button>
+              <Button asChild size="lg" variant="outline"><Link href="#how">How it works</Link></Button>
+            </motion.div>
+            <motion.dl {...rise(0.2)} className="mt-10 grid max-w-md grid-cols-3 gap-4 border-t pt-6">
+              {[
+                ["< 1 s", "to generate"],
+                ["Any", "plot shape"],
+                ["Free", "in early access"],
+              ].map(([v, l]) => (
+                <div key={l}>
+                  <dt className="sr-only">{l}</dt>
+                  <dd className="font-mono text-2xl font-semibold tabular-nums">{v}</dd>
+                  <dd className="text-xs text-muted-foreground">{l}</dd>
+                </div>
+              ))}
+            </motion.dl>
+          </div>
 
-          {/* Hero mock */}
-          <motion.div {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.2 }}
-            className="mt-16 w-full max-w-4xl">
-            <div className="glass-strong rounded-3xl p-3">
-              <div className="rounded-2xl border bg-gradient-to-br from-background to-muted/40 p-6">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { l: "Plot area", v: "216 m²" },
-                    { l: "Vastu score", v: "82 / 100" },
-                    { l: "Generated in", v: "0.4 s" },
-                  ].map((s) => (
-                    <div key={s.l} className="rounded-xl border bg-card/60 p-4 text-left">
-                      <div className="text-xs text-muted-foreground">{s.l}</div>
-                      <div className="font-display text-2xl font-bold">{s.v}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 grid grid-cols-6 gap-2">
-                  {["Living", "Kitchen", "Master", "Bed 2", "Bath", "Stair"].map((r, i) => (
-                    <div key={r} className="rounded-lg border bg-primary/5 px-2 py-6 text-center text-[11px] font-medium text-primary"
-                      style={{ gridColumn: i < 2 ? "span 2" : "span 1" }}>{r}</div>
-                  ))}
-                </div>
+          <motion.figure {...rise(0.12)} className="sheet-marks">
+            <FloorPlanCanvas
+              floor={sample.floors[0]}
+              site={sample.site}
+              view="plan"
+              meta={{ project: "3 BHK Residence", subtitle: "40 × 60 ft plot · East-facing", date: "Sample" }}
+            />
+            <figcaption className="mt-3 text-xs text-muted-foreground">
+              Generated live by the planning engine — the same output you get. 12 × 18 m plot, 3 bedrooms, 2 floors, ground floor shown.
+            </figcaption>
+          </motion.figure>
+        </div>
+      </section>
+
+      {/* How it works — a real sequence, so it's numbered. */}
+      <section id="how" className="container py-20">
+        <p className="label-mono">How it works</p>
+        <h2 className="mt-2 max-w-2xl font-display text-3xl font-bold tracking-tight sm:text-4xl">From a boundary on the map to a plan you can discuss with a builder.</h2>
+        <ol className="mt-10 grid gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-3">
+          {STEPS.map((s, i) => (
+            <li key={s.title} className="bg-card p-6">
+              <span className="font-mono text-sm text-primary">0{i + 1}</span>
+              <h3 className="mt-3 font-display text-lg font-semibold">{s.title}</h3>
+              <p className="mt-2 text-sm text-muted-foreground">{s.body}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* What every plan includes */}
+      <section id="features" className="border-y bg-card/60">
+        <div className="container py-20">
+          <p className="label-mono">On every plan</p>
+          <h2 className="mt-2 max-w-2xl font-display text-3xl font-bold tracking-tight sm:text-4xl">Drawn the way an architect would draw it.</h2>
+          <dl className="mt-10 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+            {INCLUDED.map(([t, d]) => (
+              <div key={t} className="border-t pt-4">
+                <dt className="font-semibold">{t}</dt>
+                <dd className="mt-1 text-sm text-muted-foreground">{d}</dd>
               </div>
-            </div>
-          </motion.div>
+            ))}
+          </dl>
         </div>
       </section>
 
-      {/* Audience */}
-      <section className="container py-12">
-        <div className="grid gap-4 sm:grid-cols-3">
-          {AUDIENCE.map((a) => (
-            <motion.div key={a.title} {...fadeUp}>
-              <Card glass className="h-full">
-                <CardContent className="flex items-start gap-4 pt-6">
-                  <span className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <a.icon className="size-5" />
-                  </span>
-                  <div>
-                    <h3 className="font-display font-semibold">{a.title}</h3>
-                    <p className="text-sm text-muted-foreground">{a.desc}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-      </section>
-
-      {/* Features */}
-      <section id="features" className="container py-20">
-        <motion.div {...fadeUp} className="mx-auto max-w-2xl text-center">
-          <Badge variant="accent" className="mb-3">Features</Badge>
-          <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-            Everything you need, from plot to plan
-          </h2>
-        </motion.div>
-        <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map((f, i) => (
-            <motion.div key={f.title} {...fadeUp} transition={{ ...fadeUp.transition, delay: i * 0.04 }}>
-              <Card className="group h-full transition-shadow hover:shadow-glass-lg">
-                <CardContent className="pt-6">
-                  <span className="mb-4 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
-                    <f.icon className="size-5" />
-                  </span>
-                  <h3 className="font-display font-semibold">{f.title}</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">{f.desc}</p>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-      </section>
-
-      {/* Pricing */}
+      {/* Pricing — honest about what exists today. */}
       <section id="pricing" className="container py-20">
-        <motion.div {...fadeUp} className="mx-auto max-w-2xl text-center">
-          <Badge className="mb-3">Pricing</Badge>
-          <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">Simple, transparent plans</h2>
-          <p className="mt-3 text-muted-foreground">Start free. Upgrade when you need unlimited projects and pro exports.</p>
-        </motion.div>
-        <div className="mx-auto mt-12 grid max-w-5xl gap-5 lg:grid-cols-3">
-          {PRICING.map((p) => (
-            <motion.div key={p.name} {...fadeUp}>
-              <Card glass={p.highlight} className={`relative h-full ${p.highlight ? "ring-2 ring-primary" : ""}`}>
-                {p.highlight && <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Most popular</Badge>}
-                <CardContent className="flex h-full flex-col pt-8">
-                  <h3 className="font-display text-lg font-semibold">{p.name}</h3>
-                  <div className="mt-2 flex items-end gap-1">
-                    <span className="font-display text-4xl font-bold">{p.price}</span>
-                    <span className="pb-1 text-sm text-muted-foreground">{p.period}</span>
-                  </div>
-                  <ul className="mt-6 space-y-3 text-sm">
-                    {p.features.map((f) => (
-                      <li key={f} className="flex items-center gap-2">
-                        <Check className="size-4 text-primary" /> {f}
-                      </li>
-                    ))}
-                  </ul>
-                  <Button asChild className="mt-8 w-full" variant={p.highlight ? "default" : "outline"}>
-                    <Link href="/planner">{p.cta}</Link>
-                  </Button>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-      </section>
-
-      {/* Testimonials */}
-      <section className="container py-20">
-        <div className="grid gap-5 sm:grid-cols-3">
-          {TESTIMONIALS.map((t) => (
-            <motion.div key={t.name} {...fadeUp}>
-              <Card className="h-full">
-                <CardContent className="pt-6">
-                  <p className="text-sm leading-relaxed">&ldquo;{t.quote}&rdquo;</p>
-                  <div className="mt-4">
-                    <div className="font-medium">{t.name}</div>
-                    <div className="text-xs text-muted-foreground">{t.role}</div>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
+        <p className="label-mono">Pricing</p>
+        <h2 className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl">Free while we&apos;re in early access.</h2>
+        <div className="mt-10 grid gap-6 md:grid-cols-2">
+          <div className="sheet-marks rounded-lg border bg-card p-7 shadow-sheet">
+            <div className="flex items-baseline justify-between">
+              <h3 className="font-display text-xl font-bold">Free</h3>
+              <span className="font-mono text-3xl font-semibold">₹0</span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">Everything available today.</p>
+            <ul className="mt-6 space-y-2.5 text-sm">
+              {["Unlimited plans and projects", "Plot drawing on the map", "Floor plan, site plan and 3D model", "Plan editor", "SVG and PNG export", "Saved to your account"].map((f) => (
+                <li key={f} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-primary" /> {f}</li>
+              ))}
+            </ul>
+            <Button asChild className="mt-7 w-full"><Link href="/planner">Start planning</Link></Button>
+          </div>
+          <div className="rounded-lg border border-dashed p-7">
+            <div className="flex items-baseline justify-between">
+              <h3 className="font-display text-xl font-bold">Pro</h3>
+              <span className="label-mono">Coming soon</span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">For homeowners going to construction, and for professionals.</p>
+            <ul className="mt-6 space-y-2.5 text-sm text-muted-foreground">
+              {["PDF drawing sets", "DXF export for CAD", "Photoreal exterior and interior renders", "Plan versions and comparisons"].map((f) => (
+                <li key={f} className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-muted-foreground" /> {f}</li>
+              ))}
+            </ul>
+          </div>
         </div>
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="container py-20">
-        <motion.h2 {...fadeUp} className="text-center font-display text-3xl font-bold tracking-tight sm:text-4xl">
-          Frequently asked questions
-        </motion.h2>
-        <div className="mx-auto mt-10 max-w-2xl space-y-3">
-          {FAQ.map((f) => (
-            <motion.details key={f.q} {...fadeUp} className="group rounded-2xl border bg-card p-5">
-              <summary className="flex cursor-pointer items-center justify-between font-medium">
-                {f.q}
-                <span className="text-muted-foreground transition-transform group-open:rotate-45">+</span>
-              </summary>
-              <p className="mt-3 text-sm text-muted-foreground">{f.a}</p>
-            </motion.details>
-          ))}
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section className="container pb-24">
-        <motion.div {...fadeUp} className="glass-strong relative overflow-hidden rounded-3xl px-8 py-16 text-center">
-          <div className="absolute inset-0 -z-10 spotlight" />
-          <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">Your plot. Your plan. In seconds.</h2>
-          <p className="mx-auto mt-3 max-w-xl text-muted-foreground">
-            Join homeowners, builders and architects designing smarter with AI Plot Planner.
-          </p>
-          <Button asChild size="lg" className="mt-7">
-            <Link href="/planner">Generate your first plan <ArrowRight /></Link>
-          </Button>
-        </motion.div>
-      </section>
-
-      <footer className="border-t">
-        <div className="container flex flex-col items-center justify-between gap-4 py-8 text-sm text-muted-foreground sm:flex-row">
-          <span>© {new Date().getFullYear()} AI Plot Planner. All rights reserved.</span>
-          <div className="flex gap-6">
-            <Link href="/dashboard" className="hover:text-foreground">Dashboard</Link>
-            <Link href="#pricing" className="hover:text-foreground">Pricing</Link>
-            <Link href="#faq" className="hover:text-foreground">FAQ</Link>
+      <section id="faq" className="border-t bg-card/60">
+        <div className="container grid gap-10 py-20 lg:grid-cols-[1fr_1.6fr]">
+          <div>
+            <p className="label-mono">Questions</p>
+            <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">Before you start</h2>
+          </div>
+          <div className="divide-y rounded-lg border bg-card">
+            {FAQ.map((f) => (
+              <details key={f.q} className="group p-5">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-medium">
+                  {f.q}
+                  <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                </summary>
+                <p className="mt-3 text-sm text-muted-foreground">{f.a}</p>
+              </details>
+            ))}
           </div>
         </div>
-      </footer>
+      </section>
+
+      {/* Closing call to action */}
+      <section className="border-t">
+        <div className="container flex flex-col items-start justify-between gap-6 py-16 sm:flex-row sm:items-center">
+          <h2 className="max-w-xl font-display text-2xl font-bold tracking-tight sm:text-3xl">Have a plot? See what fits on it.</h2>
+          <Button asChild size="lg"><Link href="/planner">Plan my house <ArrowRight /></Link></Button>
+        </div>
+      </section>
+
+      <SiteFooter />
     </div>
   );
 }

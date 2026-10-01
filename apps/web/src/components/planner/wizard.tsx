@@ -32,7 +32,7 @@ function Stepper({
   label, value, min, max, onChange, suffix,
 }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; suffix?: string }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border bg-card/50 p-3">
+    <div className="flex items-center justify-between rounded-md border bg-card/50 p-3">
       <span className="text-sm font-medium">{label}</span>
       <div className="flex items-center gap-3">
         <Button size="icon" variant="outline" className="size-8 rounded-lg"
@@ -57,9 +57,9 @@ function Segmented<T extends string | number>({
           key={String(o.value)}
           onClick={() => onChange(o.value)}
           className={cn(
-            "rounded-xl border px-3 py-2.5 text-sm font-medium capitalize transition-all",
+            "rounded-md border px-3 py-2.5 text-sm font-medium capitalize transition-all",
             value === o.value
-              ? "border-primary bg-primary/10 text-primary shadow-glow"
+              ? "border-primary bg-accent text-accent-foreground"
               : "border-border hover:bg-secondary/60",
           )}
         >
@@ -77,7 +77,7 @@ function Toggle({
     <button
       onClick={() => onChange(!checked)}
       className={cn(
-        "flex items-center justify-between rounded-xl border p-3 text-left transition-all",
+        "flex items-center justify-between rounded-md border p-3 text-left transition-all",
         checked ? "border-primary bg-primary/5" : "border-border hover:bg-secondary/40",
       )}
     >
@@ -124,7 +124,7 @@ export function RequirementWizard({
             <div className="flex items-center gap-2">
               <div className={cn("flex size-8 items-center justify-center rounded-full text-sm font-semibold transition-colors",
                 i < step ? "bg-primary text-primary-foreground"
-                  : i === step ? "bg-primary/15 text-primary ring-2 ring-primary"
+                  : i === step ? "bg-accent text-accent-foreground ring-2 ring-primary"
                   : "bg-muted text-muted-foreground")}>
                 {i < step ? <Check className="size-4" /> : i + 1}
               </div>
@@ -150,15 +150,15 @@ export function RequirementWizard({
                 <Field label="Plot width (m)">
                   <input type="number" value={req.plotWidth} min={3} max={100}
                     onChange={(e) => set("plotWidth", Number(e.target.value))}
-                    className="w-full rounded-xl border bg-background px-3 py-2.5 text-sm" />
+                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm" />
                 </Field>
                 <Field label="Plot depth (m)">
                   <input type="number" value={req.plotDepth} min={3} max={100}
                     onChange={(e) => set("plotDepth", Number(e.target.value))}
-                    className="w-full rounded-xl border bg-background px-3 py-2.5 text-sm" />
+                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm" />
                 </Field>
               </div>
-              <div className="rounded-xl bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+              <div className="rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
                 Plot area ≈ <b className="text-foreground">{(req.plotWidth * req.plotDepth).toFixed(0)} m²</b>
                 {" "}({(req.plotWidth * req.plotDepth * 10.7639).toFixed(0)} ft²)
               </div>

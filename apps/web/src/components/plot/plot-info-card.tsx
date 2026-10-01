@@ -15,7 +15,7 @@ function Stat({ icon: Icon, label, value, sub }: {
   icon: React.ComponentType<{ className?: string }>; label: string; value: string; sub?: string;
 }) {
   return (
-    <div className="rounded-xl border bg-card/50 p-3">
+    <div className="rounded-md border bg-card/50 p-3">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5" /> {label}
       </div>
@@ -55,7 +55,7 @@ export function PlotInfoCard({ metrics, address, facing, onFacingChange }: Props
               <Stat icon={Move} label="Width" value={`${fmt(metrics.widthM, 1)} m`} sub={`${fmt(metrics.widthM * 3.281, 1)} ft`} />
             </div>
 
-            <div className="rounded-xl border bg-card/50 p-3">
+            <div className="rounded-md border bg-card/50 p-3">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Compass className="size-3.5" /> Facing direction
                 <span className="ml-auto">auto: {metrics.facing}</span>
@@ -75,7 +75,7 @@ export function PlotInfoCard({ metrics, address, facing, onFacingChange }: Props
               </div>
             </div>
 
-            <div className="space-y-2 rounded-xl border bg-card/50 p-3 text-sm">
+            <div className="space-y-2 rounded-md border bg-card/50 p-3 text-sm">
               <div className="flex items-start gap-2">
                 <MapPin className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <span>{address?.address || "Address will appear once geocoded"}</span>
