@@ -26,7 +26,11 @@ export type RoomType =
   | "office"
   | "utility"
   | "garden"
-  | "pool";
+  | "pool"
+  | "dress"
+  | "sitout"
+  | "lounge"
+  | "terrace";
 
 export type Zone = "public" | "service" | "private" | "circulation" | "outdoor";
 
@@ -73,9 +77,11 @@ export interface Room extends Rect {
   zone: Zone;
   /** Ideal compass direction for this room per Vastu, if any. */
   idealDir?: Facing;
-  /** Actual polygon boundary of the room (when engine uses a polygon plot).
+  /** Actual polygon boundary of the room (legacy polygon layouts).
    *  x/y/w/h are the axis-aligned bounding box of this polygon. */
   polygon?: Polygon;
+  /** Ensuite bath / dressing room: the bedroom it belongs to. */
+  parentId?: string;
 }
 
 export interface Door {
@@ -86,6 +92,10 @@ export interface Door {
   width: number;
   roomId: string;
   exterior?: boolean;
+  /** "door" has a leaf + swing; "opening" is a doorless gap; "main" is the entrance. */
+  kind?: "door" | "opening" | "main";
+  /** Which side of the wall the leaf swings into: +1 = +x/+y side, -1 = the other. */
+  swing?: 1 | -1;
 }
 
 export interface WindowMark {
@@ -102,7 +112,7 @@ export interface Wall {
   x2: number;
   y2: number;
   orientation: "h" | "v";
-  type: "exterior" | "interior";
+  type: "exterior" | "interior" | "railing";
   thickness: number;
 }
 
@@ -117,6 +127,8 @@ export interface PlanMetrics {
 export interface FloorPlan {
   floor: number;
   name: string;
+  /** Which side of the footprint faces the road (for the entrance). */
+  roadSide?: "N" | "E" | "S" | "W";
   footprint: Rect;
   /** The actual polygon boundary of the buildable footprint (if polygon mode). */
   footprintPolygon?: Polygon;
@@ -127,9 +139,30 @@ export interface FloorPlan {
   metrics: PlanMetrics;
 }
 
+export type SiteElementType = "parking" | "garden" | "pool" | "driveway";
+
+export interface SiteElement extends Rect {
+  id: string;
+  type: SiteElementType;
+  label: string;
+}
+
+/** Ground-level site plan in world metres (same frame as the floors). */
+export interface SitePlan {
+  /** Plot boundary (rectangle or the user-drawn polygon). */
+  plot: Polygon;
+  /** Area inside the setbacks where building is allowed. */
+  buildable: Rect;
+  /** Which plot edge faces the road. */
+  roadSide: "N" | "E" | "S" | "W";
+  elements: SiteElement[];
+}
+
 export interface PlanResult {
   plotArea: number;
+  /** House footprint (identical on every floor). */
   footprint: Rect;
+  site: SitePlan;
   /** The original user-drawn plot polygon in local metres (if polygon mode). */
   plotPolygon?: Polygon;
   setback: { front: number; rear: number; side: number };

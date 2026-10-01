@@ -72,9 +72,38 @@ class Requirements(BaseModel):
     luxury: int = Field(ge=1, le=5, default=3)
 
 
-class GenerateIn(BaseModel):
+class PlanRoomIn(BaseModel):
+    label: str = Field(max_length=60)
+    type: str = Field(max_length=30)
+    w: float = Field(ge=0, le=200)
+    h: float = Field(ge=0, le=200)
+
+
+class PlanFloorMetricsIn(BaseModel):
+    vastuScore: int = Field(ge=0, le=100)
+
+
+class PlanFloorIn(BaseModel):
+    name: str = Field(max_length=40)
+    metrics: PlanFloorMetricsIn
+    rooms: list[PlanRoomIn] = Field(max_length=80)
+
+
+class PlanValidationIn(BaseModel):
+    ok: bool = True
+    errors: list[str] = Field(default_factory=list, max_length=40)
+
+
+class PlanIn(BaseModel):
+    """The plan the web app generated (only what the critique needs)."""
+    floors: list[PlanFloorIn] = Field(min_length=1, max_length=5)
+    validation: PlanValidationIn | None = None
+    suggestions: list[dict] = Field(default_factory=list, max_length=20)
+
+
+class SuggestionsIn(BaseModel):
     requirements: Requirements
-    project_id: str | None = None
+    plan: PlanIn
 
 
 # ---------- plots ----------

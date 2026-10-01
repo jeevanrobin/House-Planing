@@ -1,7 +1,7 @@
 """
 Claude (via Google Vertex AI) integration for AI design critique.
 
-The geometric engine in `floorplan.py` is deterministic and key-free; this
+The floor-plan engine runs in the browser (apps/web/src/lib/floorplan); this
 module layers a real LLM critique on top of a generated plan. It is entirely
 optional: when Vertex is not configured (no ANTHROPIC_VERTEX_PROJECT_ID), every
 entry point returns None so callers transparently fall back to the deterministic

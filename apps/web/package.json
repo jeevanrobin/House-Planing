@@ -8,8 +8,7 @@
     "start": "next start -p 3100",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "parity:update": "vite-node scripts/update-engine-parity.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@googlemaps/js-api-loader": "^1.16.8",
