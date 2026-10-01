@@ -22,7 +22,7 @@ Vastu-aware **2D house plans** — instantly, in the browser.
 │   │       └── lib/floorplan/   # ⭐ the AI planning engine (TypeScript)
 │   └── api/                 # FastAPI · SQLAlchemy 2 · Pydantic v2
 │       ├── app/
-│       │   ├── services/floorplan.py   # ⭐ engine, ported to Python
+│       │   ├── services/llm.py         # optional Claude critique of a plan
 │       │   ├── api/routes/  # auth · projects · ai
 │       │   └── models.py    # ORM models
 │       └── db/schema.sql    # complete PostgreSQL schema
@@ -38,12 +38,12 @@ Vastu-aware **2D house plans** — instantly, in the browser.
 | Landing page | ✅ | Hero, features, pricing, testimonials, FAQ, CTA — dark/light, glass |
 | Design system | ✅ | Tailwind tokens, glassmorphism, Shadcn-style primitives, theming |
 | Requirement wizard | ✅ | 4 steps, animated, fully typed |
-| **AI planning engine** | ✅ | Architectural solver: adjacency clusters (bedroom+ensuite), wall network, Vastu assignment pass — offline, **no API key** |
-| **2D plan generator** | ✅ | Architectural render: wall poché, door swings, window symbols, dimensions + area; flat `{rooms,doors,windows,walls}` export |
+| **AI planning engine** | ✅ | Realistic house sizing, band layout with a circulation spine, stacked stairs, site planning (parking / pool / garden), access-based doors — offline, **no API key** |
+| **2D plan generator** | ✅ | Architectural drawing: real wall thicknesses, door swings, windows, stair treads, tiled wet areas, railings, ft-in dimensions, floor-plan and site-plan views |
 | **Interactive editor** | ✅ | Drag, resize, retype rooms, undo/redo |
 | Exports | ✅ PNG/SVG · ⏳ PDF/DXF | Client-side raster/vector now; CAD later |
 | Dashboard | ✅ (mock data) | Projects, stats, subscription shell |
-| Backend API | 🟡 scaffold | `/ai/generate` is live & real (requires login, rate-limited); auth/projects need a DB |
+| Backend API | 🟡 scaffold | Auth + `/ai/suggestions` (Claude critique of a browser-generated plan); projects need a DB |
 | Auth (email/OTP/Google/JWT) | ✅ API · ⏳ UI | Password, email OTP (SMTP), Google ID-token sign-in, refresh-token rotation with reuse detection, logout. No login screens yet |
 | **Plot selection module** | ✅ | Google Maps draw/edit/delete + area/perimeter/length/width, facing, geocoding, validation. Offline fallback editor when no key |
 | Payments / Admin | ⏳ | Schema ready |
@@ -65,9 +65,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload                       # http://localhost:8000/docs
 ```
 
-`/api/v1/ai/generate` and `/ai/suggestions` require a bearer token (they are rate-limited
-and `/suggestions` can call Claude), so sign up / log in first, then POST a `requirements`
-object to get a full plan back.
+`/api/v1/ai/suggestions` requires a bearer token (it is rate-limited and can call Claude):
+sign up / log in first, then POST `{ requirements, plan }` with a plan generated in the web app.
 
 The API treats any `ENV` other than `development` as production: it refuses to start
 unless `JWT_SECRET` is a random value of at least 32 characters, and never echoes OTP codes.
@@ -81,31 +80,32 @@ Postgres auto-applies `apps/api/db/schema.sql` on first boot.
 
 ## The planning engine
 
-The differentiator. Given plot dimensions, facing and requirements it:
+The differentiator, in `apps/web/src/lib/floorplan` (TypeScript, runs instantly in the
+browser — no server or API key). Given the plot, facing and brief it:
 
-1. Applies size-aware **setbacks** to derive the buildable footprint.
-2. Synthesises a **room program** per floor (areas, zones, Vastu ideal directions),
-   distributing bedrooms/baths across floors.
-3. Runs a **zonal squarified-slicing** solver — public → circulation → service →
-   private bands oriented to the plot's facing — producing non-overlapping rooms
-   that tile the footprint exactly.
-4. Places **doors** (interior walls) and **windows** (exterior walls), computes
-   **carpet/built-up efficiency**, and scores **Vastu** by comparing each room's
-   actual compass octant to its ideal.
-5. Emits actionable **suggestions** (ventilation, Vastu, cost, circulation).
+1. **Sizes the house to the brief, not the plot.** Each room has a realistic target area
+   and minimum width/depth (scaled by luxury level and budget). The engine tries house
+   widths in 25 cm steps, lays every floor out, and keeps the width whose rooms best hit
+   their targets while fitting the buildable area and the yards.
+2. **Lays rooms out in front-to-back bands** like a real Indian home: sit-out → living
+   (+ guest bedroom) → kitchen / dining / stair → hallway → bedrooms with attached bath and
+   dressing. Living, dining, stair and hallways form one connected circulation spine.
+3. **Stacks floors on one structural core** — the staircase sits in exactly the same
+   place on every floor; spare depth upstairs becomes an open terrace.
+4. **Places the house on the site** with setbacks; cars, pool and garden go in the open
+   yards (or a covered car porch on small plots). Tight plots get compact rooms, then
+   drop the sit-out, before anything is squashed.
+5. **Doors and windows from access rules** (bedrooms off the hallway, ensuites off their
+   bedroom, kitchen off dining, main door facing the road), then a connectivity pass
+   guarantees every room is reachable. Real wall thicknesses (230 / 115 mm).
+6. **Scores Vastu** per room octant, tries mirrored/reordered variants, keeps the best.
 
-It's implemented identically in TypeScript (`apps/web/src/lib/floorplan`) for instant
-client-side generation and in Python (`apps/api/app/services/floorplan.py`) for the API.
+`engine.test.ts` checks hard invariants over a seeded sweep of random briefs: rooms tile
+the house exactly with no overlaps, every room is reachable, stairs stack, and site
+features stay on the plot and clear of the house.
 
-**Keeping the two engines in sync.** The TypeScript engine is the source of truth.
-`fixtures/engine-parity/` holds shared input cases and the plans the TS engine produces
-for them; Vitest fails if the TS output changes and pytest fails if Python differs from it
-(beyond 1.5 mm). After an intentional engine change:
-
-```bash
-cd apps/web && npm run parity:update   # regenerate expected.json from the TS engine
-cd ../api && python -m pytest tests/test_engine_parity.py   # then port until this passes
-```
+The API (`/ai/suggestions`) accepts the plan the browser generated and adds an optional
+Claude design critique.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design system, security,
 scaling strategy and AWS deployment.

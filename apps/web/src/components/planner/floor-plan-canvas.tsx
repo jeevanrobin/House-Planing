@@ -2,31 +2,49 @@
 
 import * as React from "react";
 import { Undo2, Redo2, Maximize2 } from "lucide-react";
-import { placeOpenings, placeOpeningsPoly } from "@/lib/floorplan/engine";
-import { generateWalls, generatePolygonWalls } from "@/lib/floorplan/walls";
-import { ZONE_FILL } from "@/lib/floorplan/palette";
-import { polygonCentroid } from "@/lib/floorplan/polygon-ops";
-import type { Facing, FloorPlan, Polygon, Room, RoomType } from "@/lib/floorplan/types";
+import { placeOpenings } from "@/lib/floorplan/engine";
+import { generateWalls } from "@/lib/floorplan/walls";
+import { polygonBBox } from "@/lib/floorplan/polygon-ops";
+import type { Door, FloorPlan, Polygon, Room, RoomType, SitePlan, Wall, WindowMark } from "@/lib/floorplan/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const PAD = 1.8; // metres of margin around footprint in the viewBox
-const PAPER = "#F6F4EE";
-const WALL = "#2C2A26";
-const OPENING_CUT = 0.74; // gap width that erases a wall for a door/window
-
-const COMPASS_ROT: Record<Facing, number> = {
-  N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315,
+const PAD = 2.2; // metres of margin around the plot
+const C = {
+  paper: "#F7F5EF",
+  ground: "#ECEADF",
+  plotLine: "#8A8475",
+  setback: "#B9B2A2",
+  room: "#FFFFFF",
+  wall: "#24221E",
+  railing: "#6F6A60",
+  ink: "#2E2B25",
+  inkSoft: "#7A7466",
+  inkFaint: "#A39D8F",
+  door: "#8C8578",
+  glass: "#5B8DB0",
+  grass: "#DDE8CF",
+  grassInk: "#9DB585",
+  water: "#CFE6F2",
+  waterInk: "#6FA3C2",
+  paving: "#EFEBE1",
+  tile: "#E9EEF1",
+  accent: "hsl(var(--primary))",
 };
 
+const OPEN_ROOMS: RoomType[] = ["sitout", "balcony", "terrace", "parking"];
+const WET_ROOMS: RoomType[] = ["bathroom", "toilet", "utility"];
+
 const ROOM_TYPES: RoomType[] = [
-  "living", "dining", "kitchen", "foyer", "bedroom", "master_bedroom",
-  "bathroom", "toilet", "pooja", "office", "stair", "store", "utility", "balcony", "parking",
+  "living", "lounge", "dining", "kitchen", "bedroom", "master_bedroom", "bathroom", "toilet",
+  "dress", "pooja", "office", "stair", "store", "utility", "corridor", "sitout", "balcony", "terrace",
 ];
 
 interface Props {
   floor: FloorPlan;
-  facing: Facing;
+  site: SitePlan;
+  /** "plan" frames the house; "site" shows the whole plot. */
+  view?: "plan" | "site";
   editable?: boolean;
   className?: string;
 }
@@ -36,11 +54,21 @@ type DragState =
   | { mode: "resize"; id: string; ox: number; oy: number }
   | null;
 
-export function FloorPlanCanvas({ floor, facing, editable = false, className }: Props) {
+/** 3.45 m → 11′4″ */
+function ftIn(m: number): string {
+  const totalIn = Math.round(m * 39.3701);
+  return `${Math.floor(totalIn / 12)}′${totalIn % 12}″`;
+}
+
+export function FloorPlanCanvas({ floor, site, view = "plan", editable = false, className }: Props) {
   const fp = floor.footprint;
-  const fpPoly = floor.footprintPolygon;
-  const isPolyMode = !!fpPoly && fpPoly.length >= 3;
-  const vb = { x: fp.x - PAD, y: fp.y - PAD, w: fp.w + PAD * 2, h: fp.h + PAD * 2 };
+  const isGround = floor.floor === 0;
+  const bb = polygonBBox(site.plot);
+  const M = 3.4; // margin around the house in plan view (room for dimensions)
+  const vb = view === "site"
+    ? { x: bb.x - PAD, y: bb.y - PAD, w: bb.w + PAD * 2, h: bb.h + PAD * 2 }
+    : { x: fp.x - M, y: fp.y - M, w: fp.w + M * 2, h: fp.h + M * 2 };
+  const s = Math.max(vb.w, vb.h) / 30; // marker scale relative to a 30 m drawing
 
   const [rooms, setRooms] = React.useState<Room[]>(floor.rooms);
   const [selected, setSelected] = React.useState<string | null>(null);
@@ -56,15 +84,9 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
     setSelected(null);
   }, [floor]);
 
-  // Walls, doors and windows are derived from the rooms, so they stay
-  // consistent through every edit.
-  const openings = React.useMemo(() => {
-    return isPolyMode ? placeOpeningsPoly(rooms, fpPoly!) : placeOpenings(rooms, fp);
-  }, [rooms, fp, isPolyMode, fpPoly]);
-
-  const walls = React.useMemo(() => {
-    return isPolyMode ? generatePolygonWalls(rooms, fpPoly!) : generateWalls(rooms, fp);
-  }, [rooms, fp, isPolyMode, fpPoly]);
+  // Walls, doors and windows derive from the rooms, so edits stay consistent.
+  const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide), [rooms, fp, floor.roadSide]);
+  const walls = React.useMemo(() => generateWalls(rooms, fp), [rooms, fp]);
 
   const commit = (next: Room[]) => {
     setPast((p) => [...p, rooms]);
@@ -97,7 +119,7 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
     const local = ctm ? pt.matrixTransform(ctm.inverse()) : pt;
     return { x: local.x, y: local.y };
   };
-  const snap = (v: number) => Math.round(v / 0.25) * 0.25;
+  const snap = (v: number) => Math.round(v / 0.15) * 0.15;
 
   const onPointerDown = (e: React.PointerEvent, id: string, mode: "move" | "resize") => {
     if (!editable) return;
@@ -118,14 +140,12 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
       rs.map((r) => {
         if (r.id !== d.id) return r;
         if (d.mode === "move") {
-          let nx = snap(m.x - d.ox);
-          let ny = snap(m.y - d.oy);
-          nx = Math.max(fp.x, Math.min(nx, fp.x + fp.w - r.w));
-          ny = Math.max(fp.y, Math.min(ny, fp.y + fp.h - r.h));
+          const nx = Math.max(fp.x, Math.min(snap(m.x - d.ox), fp.x + fp.w - r.w));
+          const ny = Math.max(fp.y, Math.min(snap(m.y - d.oy), fp.y + fp.h - r.h));
           return { ...r, x: nx, y: ny };
         }
-        const nw = Math.max(1.5, snap(m.x - r.x));
-        const nh = Math.max(1.5, snap(m.y - r.y));
+        const nw = Math.max(1.2, snap(m.x - r.x));
+        const nh = Math.max(1.2, snap(m.y - r.y));
         return { ...r, w: Math.min(nw, fp.x + fp.w - r.x), h: Math.min(nh, fp.y + fp.h - r.y) };
       }),
     );
@@ -136,6 +156,7 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
     commit(rooms.map((r) => (r.id === id ? { ...r, type, label: labelFor(type) } : r)));
 
   const sel = rooms.find((r) => r.id === selected) ?? null;
+  const roadMid = roadLabelPos(site, vb);
 
   return (
     <div className={cn("flex flex-col gap-3", className)}>
@@ -161,172 +182,156 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
           ref={svgRef}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
           className="h-auto w-full touch-none select-none"
+          style={{ fontFamily: "var(--font-sans, ui-sans-serif, system-ui)" }}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
           onClick={() => setSelected(null)}
         >
           <defs>
-            <pattern id="fp-grid" width={1} height={1} patternUnits="userSpaceOnUse">
-              <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#000" strokeOpacity={0.04} strokeWidth={0.02} />
+            <pattern id="fp-tile" width={0.3} height={0.3} patternUnits="userSpaceOnUse">
+              <rect width={0.3} height={0.3} fill={C.tile} />
+              <path d="M 0.3 0 L 0 0 0 0.3" fill="none" stroke="#C9D3DA" strokeWidth={0.012} />
             </pattern>
-            <filter id="fp-shadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx={0.18} dy={0.3} stdDeviation={0.35} floodColor="#000" floodOpacity={0.18} />
-            </filter>
+            <pattern id="fp-paving" width={0.6} height={0.6} patternUnits="userSpaceOnUse">
+              <rect width={0.6} height={0.6} fill={C.paving} />
+              <path d="M 0.6 0 L 0 0 0 0.6" fill="none" stroke="#DCD5C5" strokeWidth={0.015} />
+            </pattern>
+            <pattern id="fp-deck" width={0.15} height={1} patternUnits="userSpaceOnUse">
+              <rect width={0.15} height={1} fill="#F1E9DA" />
+              <path d="M 0.15 0 L 0.15 1" stroke="#DCCDB3" strokeWidth={0.012} />
+            </pattern>
+            <pattern id="fp-grass" width={0.8} height={0.8} patternUnits="userSpaceOnUse">
+              <rect width={0.8} height={0.8} fill={C.grass} />
+              <path d="M 0.2 0.5 l 0.05 -0.12 l 0.05 0.12 M 0.55 0.25 l 0.05 -0.12 l 0.05 0.12" fill="none" stroke={C.grassInk} strokeWidth={0.02} />
+            </pattern>
           </defs>
 
-          <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={PAPER} />
+          <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={C.paper} />
 
-          {/* Footprint background & grid */}
-          {isPolyMode ? (
-            <>
-              <defs>
-                <clipPath id="fp-clip">
-                  <polygon points={polyPoints(fpPoly!)} />
-                </clipPath>
-              </defs>
-              <rect x={fp.x} y={fp.y} width={fp.w} height={fp.h} fill="url(#fp-grid)" clipPath="url(#fp-clip)" />
-              <polygon points={polyPoints(fpPoly!)} fill="#FFFFFF" filter="url(#fp-shadow)" />
-            </>
-          ) : (
-            <>
-              <rect x={fp.x} y={fp.y} width={fp.w} height={fp.h} fill="url(#fp-grid)" />
-              <rect x={fp.x} y={fp.y} width={fp.w} height={fp.h} fill="#FFFFFF" filter="url(#fp-shadow)" />
-            </>
+          {/* Plot, setback line and road */}
+          <polygon points={pts(site.plot)} fill={C.ground} stroke={C.plotLine} strokeWidth={0.06 * s}
+            strokeDasharray={`${0.9 * s} ${0.25 * s} ${0.15 * s} ${0.25 * s}`} />
+          {isGround && (
+            <rect x={site.buildable.x} y={site.buildable.y} width={site.buildable.w} height={site.buildable.h}
+              fill="none" stroke={C.setback} strokeWidth={0.035 * s} strokeDasharray={`${0.3 * s} ${0.2 * s}`} />
           )}
+          <text x={roadMid.x} y={roadMid.y} textAnchor="middle" dominantBaseline="middle"
+            transform={roadMid.rotate ? `rotate(-90 ${roadMid.x} ${roadMid.y})` : undefined}
+            fill={C.inkFaint} style={{ fontSize: 0.42 * s, fontWeight: 700, letterSpacing: 0.25 * s }}>
+            ROAD
+          </text>
 
-          {/* Room fills (white with a faint zone tint) + interaction */}
+          {/* Site elements (faded above the ground floor) */}
+          <g opacity={isGround ? 1 : 0.35} pointerEvents="none">
+            {site.elements.map((e) => (
+              <g key={e.id}>
+                {e.type === "garden" && <GardenShape x={e.x} y={e.y} w={e.w} h={e.h} />}
+                {e.type === "pool" && <PoolShape x={e.x} y={e.y} w={e.w} h={e.h} />}
+                {e.type === "parking" && <CarShape x={e.x} y={e.y} w={e.w} h={e.h} />}
+                {e.type !== "parking" && (
+                  <text x={e.x + e.w / 2} y={e.y + e.h / 2} textAnchor="middle" dominantBaseline="middle"
+                    fill={C.inkSoft} style={{ fontSize: Math.min(0.5, e.w / 7, e.h / 3), fontWeight: 600 }}>
+                    {e.label}
+                  </text>
+                )}
+              </g>
+            ))}
+          </g>
+
+          {/* House shadow */}
+          <rect x={fp.x + 0.12} y={fp.y + 0.18} width={fp.w} height={fp.h} fill="#000" opacity={0.08} />
+
+          {/* Room floors */}
           {rooms.map((r) => {
             const isSel = r.id === selected;
-            const hasRPoly = !!r.polygon && r.polygon.length >= 3;
+            const fill = r.type === "terrace" ? "url(#fp-paving)"
+              : r.type === "sitout" || r.type === "balcony" ? "url(#fp-deck)"
+                : r.type === "parking" ? "url(#fp-paving)"
+                  : WET_ROOMS.includes(r.type) ? "url(#fp-tile)" : C.room;
             return (
               <g key={r.id} onClick={(e) => { e.stopPropagation(); setSelected(r.id); }}>
-                {hasRPoly ? (
-                  <>
-                    <polygon points={polyPoints(r.polygon!)} fill="#FFFFFF" />
-                    <polygon points={polyPoints(r.polygon!)}
-                      fill={ZONE_FILL[r.zone]} fillOpacity={isSel ? 0.2 : 0.08}
-                      className={editable ? "cursor-move" : undefined}
-                      onPointerDown={(e) => onPointerDown(e, r.id, "move")} />
-                    {isSel && (
-                      <polygon points={polyPoints(r.polygon!)} fill="none"
-                        stroke="hsl(var(--primary))" strokeWidth={0.12} strokeDasharray="0.4 0.3" pointerEvents="none" />
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="#FFFFFF" />
-                    <rect x={r.x} y={r.y} width={r.w} height={r.h}
-                      fill={ZONE_FILL[r.zone]} fillOpacity={isSel ? 0.2 : 0.08}
-                      className={editable ? "cursor-move" : undefined}
-                      onPointerDown={(e) => onPointerDown(e, r.id, "move")} />
-                    {isSel && (
-                      <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="none"
-                        stroke="hsl(var(--primary))" strokeWidth={0.12} strokeDasharray="0.4 0.3" pointerEvents="none" />
-                    )}
-                  </>
+                <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={fill}
+                  className={editable ? "cursor-move" : undefined}
+                  onPointerDown={(e) => onPointerDown(e, r.id, "move")} />
+                {isSel && (
+                  <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={C.accent} fillOpacity={0.12}
+                    stroke={C.accent} strokeWidth={0.07} strokeDasharray="0.3 0.2" pointerEvents="none" />
                 )}
               </g>
             );
           })}
 
-          {/* Walls (poché) */}
-          {walls.map((w, i) => (
-            <line key={`wall-${i}`} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2}
-              stroke={WALL} strokeWidth={w.thickness} strokeLinecap="square" pointerEvents="none" />
-          ))}
+          {/* Fixtures */}
+          <g pointerEvents="none">
+            {rooms.filter((r) => r.type === "stair").map((r) => <StairShape key={`st-${r.id}`} r={r} />)}
+            {rooms.filter((r) => r.type === "parking").map((r) => (
+              <CarShape key={`car-${r.id}`} x={r.x + 0.15} y={r.y + 0.15} w={r.w - 0.3} h={r.h - 0.3} />
+            ))}
+          </g>
 
-          {/* Door openings: erase the wall, then draw leaf + swing */}
-          {openings.doors.map((d, i) => {
-            const arcR = d.width;
-            return (
-              <g key={`door-${i}`} pointerEvents="none">
-                {d.orientation === "v" ? (
-                  <>
-                    <line x1={d.x} y1={d.y} x2={d.x} y2={d.y + d.width} stroke={PAPER} strokeWidth={OPENING_CUT} />
-                    <path d={`M ${d.x} ${d.y} v ${d.width} M ${d.x} ${d.y} a ${arcR} ${arcR} 0 0 1 ${arcR} ${arcR}`}
-                      fill="none" stroke="#9A948A" strokeWidth={0.06} />
-                  </>
-                ) : (
-                  <>
-                    <line x1={d.x} y1={d.y} x2={d.x + d.width} y2={d.y} stroke={PAPER} strokeWidth={OPENING_CUT} />
-                    <path d={`M ${d.x} ${d.y} h ${d.width} M ${d.x} ${d.y} a ${arcR} ${arcR} 0 0 0 ${arcR} ${arcR}`}
-                      fill="none" stroke="#9A948A" strokeWidth={0.06} />
-                  </>
-                )}
-              </g>
-            );
-          })}
+          {/* Walls */}
+          {walls.map((w, i) => <WallLine key={`w-${i}`} w={w} />)}
 
-          {/* Window openings: erase the wall, then draw the glass frame */}
-          {openings.windows.map((w, i) => {
-            const v = w.orientation === "v";
-            return (
-              <g key={`win-${i}`} pointerEvents="none">
-                <line x1={w.x} y1={w.y} x2={v ? w.x : w.x + w.width} y2={v ? w.y + w.width : w.y}
-                  stroke={PAPER} strokeWidth={OPENING_CUT} />
-                {[-0.16, 0, 0.16].map((off, k) => (
-                  <line key={k}
-                    x1={v ? w.x + off : w.x} y1={v ? w.y : w.y + off}
-                    x2={v ? w.x + off : w.x + w.width} y2={v ? w.y + w.width : w.y + off}
-                    stroke={k === 1 ? "#7FB4D4" : "#5E8FB0"} strokeWidth={0.06} />
-                ))}
-              </g>
-            );
-          })}
+          {/* Doors & windows cut the walls */}
+          {openings.windows.map((w, i) => <WindowMarkShape key={`win-${i}`} w={w} walls={walls} />)}
+          {openings.doors.map((d, i) => <DoorShape key={`door-${i}`} d={d} walls={walls} />)}
 
-          {/* Labels: name + dimensions + area */}
+          {/* Labels */}
           {rooms.map((r) => {
-            const big = r.w > 2.4 && r.h > 1.8;
-            const fs = Math.min(0.62, r.w / 9, r.h / 5);
-            // Use polygon centroid for better label placement in irregular shapes.
-            const [cx, cy] = r.polygon && r.polygon.length >= 3
-              ? polygonCentroid(r.polygon)
-              : [r.x + r.w / 2, r.y + r.h / 2];
+            if (r.type === "corridor" && Math.min(r.w, r.h) < 1.5) return null;
+            const area = r.w * r.h;
+            const fs = Math.max(0.22, Math.min(0.42, r.w / 8, r.h / 4));
+            const showDims = r.w > 1.8 && r.h > 1.6 && !OPEN_ROOMS.includes(r.type);
+            const cx = r.x + r.w / 2;
+            const cy = r.y + r.h / 2;
+            const vertical = r.h > r.w * 1.8 && r.w < 1.7;
             return (
-              <g key={`lbl-${r.id}`} pointerEvents="none" textAnchor="middle">
-                <text x={cx} y={cy - (big ? 0.45 : 0)} dominantBaseline="middle"
-                  fill="#3A372F" style={{ fontSize: Math.max(0.42, fs), fontWeight: 700 }}>
-                  {r.label}
+              <g key={`lbl-${r.id}`} pointerEvents="none" textAnchor="middle"
+                transform={vertical ? `rotate(-90 ${cx} ${cy})` : undefined}>
+                <text x={cx} y={cy - (showDims ? fs * 0.55 : 0)} dominantBaseline="middle" fill={C.ink}
+                  style={{ fontSize: fs, fontWeight: 650, letterSpacing: 0.01 }}>
+                  {r.label.toUpperCase()}
                 </text>
-                {big && (
-                  <>
-                    <text x={cx} y={cy + 0.5} dominantBaseline="middle"
-                      fill="#7C766A" style={{ fontSize: 0.42, fontWeight: 600 }}>
-                      {(r.w * 3.281).toFixed(1)}′ × {(r.h * 3.281).toFixed(1)}′
-                    </text>
-                    <text x={cx} y={cy + 1.15} dominantBaseline="middle"
-                      fill="#9A948A" style={{ fontSize: 0.38, fontWeight: 600 }}>
-                      {Math.round(r.w * r.h * 10.764)} ft²
-                    </text>
-                  </>
+                {showDims && (
+                  <text x={cx} y={cy + fs * 0.75} dominantBaseline="middle" fill={C.inkSoft}
+                    style={{ fontSize: fs * 0.82, fontWeight: 500 }}>
+                    {ftIn(r.w)} × {ftIn(r.h)}
+                  </text>
+                )}
+                {showDims && area > 9 && (
+                  <text x={cx} y={cy + fs * 1.75} dominantBaseline="middle" fill={C.inkFaint}
+                    style={{ fontSize: fs * 0.7, fontWeight: 500 }}>
+                    {Math.round(area * 10.764)} sq ft
+                  </text>
                 )}
               </g>
             );
           })}
+
+          {/* Overall dimensions */}
+          <DimLine x1={fp.x} y1={fp.y - 0.9} x2={fp.x + fp.w} y2={fp.y - 0.9} label={`${ftIn(fp.w)} (${fp.w.toFixed(2)} m)`} s={s} />
+          <DimLine x1={fp.x - 0.9} y1={fp.y} x2={fp.x - 0.9} y2={fp.y + fp.h} label={`${ftIn(fp.h)} (${fp.h.toFixed(2)} m)`} s={s} vertical />
 
           {/* Resize handle */}
           {editable && sel && (
-            <rect x={sel.x + sel.w - 0.55} y={sel.y + sel.h - 0.55} width={0.6} height={0.6} rx={0.1}
-              fill="hsl(var(--primary))" className="cursor-se-resize"
+            <rect x={sel.x + sel.w - 0.45} y={sel.y + sel.h - 0.45} width={0.5} height={0.5} rx={0.08}
+              fill={C.accent} className="cursor-se-resize"
               onPointerDown={(e) => onPointerDown(e, sel.id, "resize")} />
           )}
 
-          {/* Compass */}
-          <g transform={`translate(${vb.x + 1.2} ${vb.y + 1.2})`}>
-            <circle r={0.85} fill="#FFFFFF" stroke="#D8D3C7" strokeWidth={0.07} />
-            <g transform={`rotate(${COMPASS_ROT[facing]})`}>
-              <path d="M 0 -0.62 L 0.22 0.16 L 0 0 L -0.22 0.16 Z" fill="#C0392B" />
-            </g>
-            <text y={-0.95} textAnchor="middle" style={{ fontSize: 0.36, fontWeight: 700 }} fill="#7C766A">N</text>
+          {/* North arrow (north is always up) and scale bar */}
+          <g transform={`translate(${vb.x + vb.w - 1.3 * s} ${vb.y + 1.4 * s}) scale(${s})`} pointerEvents="none">
+            <circle r={0.75} fill="#FFFFFF" stroke="#CFC8B8" strokeWidth={0.05} />
+            <path d="M 0 -0.58 L 0.24 0.3 L 0 0.12 L -0.24 0.3 Z" fill={C.ink} />
+            <text y={-0.9} textAnchor="middle" style={{ fontSize: 0.36, fontWeight: 800 }} fill={C.ink}>N</text>
           </g>
-
-          {/* Scale bar (5 m) */}
-          <g transform={`translate(${fp.x + fp.w - 5} ${vb.y + vb.h - 0.7})`} stroke="#7C766A" fill="#7C766A">
-            <line x1={0} y1={0} x2={5} y2={0} strokeWidth={0.09} />
-            <line x1={0} y1={-0.16} x2={0} y2={0.16} strokeWidth={0.09} />
-            <line x1={5} y1={-0.16} x2={5} y2={0.16} strokeWidth={0.09} />
-            <text x={2.5} y={-0.32} textAnchor="middle" stroke="none" style={{ fontSize: 0.36, fontWeight: 600 }}>5 m · 16′</text>
+          <g transform={`translate(${vb.x + 0.8 * s} ${vb.y + vb.h - 0.7 * s})`} pointerEvents="none" fill={C.inkSoft}>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <rect key={i} x={i} y={-0.12 * s} width={1} height={0.12 * s} fill={i % 2 ? "#FFFFFF" : C.inkSoft} stroke={C.inkSoft} strokeWidth={0.02 * s} />
+            ))}
+            <text x={0} y={-0.32 * s} style={{ fontSize: 0.3 * s, fontWeight: 600 }}>0</text>
+            <text x={5} y={-0.32 * s} textAnchor="middle" style={{ fontSize: 0.3 * s, fontWeight: 600 }}>5 m</text>
           </g>
         </svg>
       </div>
@@ -334,16 +339,227 @@ export function FloorPlanCanvas({ floor, facing, editable = false, className }: 
   );
 }
 
+function pts(poly: Polygon): string {
+  return poly.map(([x, y]) => `${x},${y}`).join(" ");
+}
+
+/** "ROAD" label on the drawing edge that faces the road. */
+function roadLabelPos(site: SitePlan, vb: { x: number; y: number; w: number; h: number }) {
+  const cx = vb.x + vb.w / 2;
+  const cy = vb.y + vb.h / 2;
+  const m = Math.max(vb.w, vb.h) / 34;
+  switch (site.roadSide) {
+    case "N": return { x: cx, y: vb.y + m, rotate: false };
+    case "S": return { x: cx, y: vb.y + vb.h - m, rotate: false };
+    case "E": return { x: vb.x + vb.w - m, y: cy, rotate: true };
+    case "W": return { x: vb.x + m, y: cy, rotate: true };
+  }
+}
+
+function WallLine({ w }: { w: Wall }) {
+  if (w.type === "railing") {
+    const off = 0.05;
+    const v = w.orientation === "v";
+    return (
+      <g pointerEvents="none" stroke={C.railing} strokeWidth={0.025}>
+        <line x1={w.x1 - (v ? off : 0)} y1={w.y1 - (v ? 0 : off)} x2={w.x2 - (v ? off : 0)} y2={w.y2 - (v ? 0 : off)} />
+        <line x1={w.x1 + (v ? off : 0)} y1={w.y1 + (v ? 0 : off)} x2={w.x2 + (v ? off : 0)} y2={w.y2 + (v ? 0 : off)} />
+      </g>
+    );
+  }
+  return (
+    <line x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} stroke={C.wall} strokeWidth={w.thickness}
+      strokeLinecap="square" pointerEvents="none" />
+  );
+}
+
+/** Thickest wall at an opening (so the cut fully erases it). */
+function wallThicknessAt(o: { x: number; y: number; orientation: "h" | "v" }, walls: Wall[]): number {
+  const hit = walls.filter((w) => w.orientation === o.orientation && w.type !== "railing" && (o.orientation === "v"
+    ? Math.abs(w.x1 - o.x) < 0.03 && o.y >= Math.min(w.y1, w.y2) - 0.05 && o.y <= Math.max(w.y1, w.y2) + 0.05
+    : Math.abs(w.y1 - o.y) < 0.03 && o.x >= Math.min(w.x1, w.x2) - 0.05 && o.x <= Math.max(w.x1, w.x2) + 0.05));
+  return Math.max(0.12, ...hit.map((w) => w.thickness));
+}
+
+function DoorShape({ d, walls }: { d: Door; walls: Wall[] }) {
+  const t = wallThicknessAt(d, walls) + 0.02;
+  const v = d.orientation === "v";
+  const w = d.width;
+  const sgn = d.swing ?? 1;
+  const cut = v
+    ? <rect x={d.x - t / 2} y={d.y} width={t} height={w} fill={C.room} />
+    : <rect x={d.x} y={d.y - t / 2} width={w} height={t} fill={C.room} />;
+  if (d.kind === "opening") return <g pointerEvents="none">{cut}</g>;
+  // Leaf drawn open at 90°, with a quarter-circle swing back to the frame.
+  const hx = d.x;
+  const hy = d.y;
+  const leaf = v ? { x: hx + sgn * w, y: hy } : { x: hx, y: hy + sgn * w };
+  const end = v ? { x: hx, y: hy + w } : { x: hx + w, y: hy };
+  const sweep = v ? (sgn > 0 ? 1 : 0) : (sgn > 0 ? 0 : 1);
+  const main = d.kind === "main";
+  return (
+    <g pointerEvents="none">
+      {cut}
+      <line x1={hx} y1={hy} x2={leaf.x} y2={leaf.y} stroke={main ? C.ink : C.door} strokeWidth={main ? 0.07 : 0.045} />
+      <path d={`M ${leaf.x} ${leaf.y} A ${w} ${w} 0 0 ${sweep} ${end.x} ${end.y}`} fill="none"
+        stroke={C.door} strokeWidth={0.02} strokeDasharray={main ? undefined : "0.08 0.05"} />
+      {main && (
+        <path
+          d={v
+            ? `M ${hx - sgn * 0.75} ${hy + w / 2 - 0.22} l ${sgn * 0.35} 0.22 l ${-sgn * 0.35} 0.22 z`
+            : `M ${hx + w / 2 - 0.22} ${hy - sgn * 0.75} l 0.22 ${sgn * 0.35} l 0.22 ${-sgn * 0.35} z`}
+          fill={C.accent} />
+      )}
+    </g>
+  );
+}
+
+function WindowMarkShape({ w, walls }: { w: WindowMark; walls: Wall[] }) {
+  const t = wallThicknessAt(w, walls);
+  const v = w.orientation === "v";
+  return (
+    <g pointerEvents="none">
+      {v ? (
+        <>
+          <rect x={w.x - t / 2} y={w.y} width={t} height={w.width} fill="#FFFFFF" stroke={C.wall} strokeWidth={0.02} />
+          <line x1={w.x} y1={w.y} x2={w.x} y2={w.y + w.width} stroke={C.glass} strokeWidth={0.03} />
+        </>
+      ) : (
+        <>
+          <rect x={w.x} y={w.y - t / 2} width={w.width} height={t} fill="#FFFFFF" stroke={C.wall} strokeWidth={0.02} />
+          <line x1={w.x} y1={w.y} x2={w.x + w.width} y2={w.y} stroke={C.glass} strokeWidth={0.03} />
+        </>
+      )}
+    </g>
+  );
+}
+
+function StairShape({ r }: { r: Room }) {
+  // Dog-leg stair: two flights along the long side, a landing at the far end.
+  const alongY = r.h >= r.w;
+  const len = alongY ? r.h : r.w;
+  const wid = alongY ? r.w : r.h;
+  const landing = Math.min(wid / 2, len * 0.3);
+  const run = len - landing;
+  const treads = Math.max(6, Math.round(run / 0.28));
+  const lines: React.ReactNode[] = [];
+  for (let i = 1; i < treads; i++) {
+    const p = (run * i) / treads;
+    lines.push(alongY
+      ? <line key={i} x1={r.x} y1={r.y + landing + p} x2={r.x + r.w} y2={r.y + landing + p} />
+      : <line key={i} x1={r.x + landing + p} y1={r.y} x2={r.x + landing + p} y2={r.y + r.h} />);
+  }
+  const mid = alongY
+    ? <line x1={r.x + r.w / 2} y1={r.y + landing} x2={r.x + r.w / 2} y2={r.y + r.h} strokeWidth={0.04} />
+    : <line x1={r.x + landing} y1={r.y + r.h / 2} x2={r.x + r.w} y2={r.y + r.h / 2} strokeWidth={0.04} />;
+  const arrow = alongY
+    ? `M ${r.x + r.w * 0.25} ${r.y + r.h - 0.3} L ${r.x + r.w * 0.25} ${r.y + landing + 0.2}`
+    : `M ${r.x + r.w - 0.3} ${r.y + r.h * 0.25} L ${r.x + landing + 0.2} ${r.y + r.h * 0.25}`;
+  return (
+    <g stroke="#B5AE9F" strokeWidth={0.02}>
+      {lines}
+      {mid}
+      <path d={arrow} stroke={C.inkSoft} strokeWidth={0.035} markerEnd="" />
+      <text x={alongY ? r.x + r.w * 0.25 : r.x + r.w - 0.55} y={alongY ? r.y + r.h - 0.15 : r.y + r.h * 0.25 + 0.12}
+        textAnchor="middle" stroke="none" fill={C.inkSoft} style={{ fontSize: 0.22, fontWeight: 700 }}>UP</text>
+    </g>
+  );
+}
+
+function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const vertical = h >= w;
+  const cw = vertical ? Math.min(w * 0.72, 1.9) : Math.min(h * 0.72, 1.9);
+  const cl = vertical ? Math.min(h * 0.82, 4.5) : Math.min(w * 0.82, 4.5);
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const bw = vertical ? cw : cl;
+  const bh = vertical ? cl : cw;
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} fill="url(#fp-paving)" stroke="#D2CABA" strokeWidth={0.03} />
+      <rect x={cx - bw / 2} y={cy - bh / 2} width={bw} height={bh} rx={0.45} fill="#FFFFFF" stroke="#9C9586" strokeWidth={0.04} />
+      {vertical ? (
+        <>
+          <rect x={cx - bw / 2 + 0.2} y={cy - bh / 2 + bh * 0.24} width={bw - 0.4} height={bh * 0.18} rx={0.12} fill="#E5E1D8" />
+          <rect x={cx - bw / 2 + 0.2} y={cy + bh * 0.12} width={bw - 0.4} height={bh * 0.14} rx={0.12} fill="#E5E1D8" />
+        </>
+      ) : (
+        <>
+          <rect x={cx - bw / 2 + bw * 0.24} y={cy - bh / 2 + 0.2} width={bw * 0.18} height={bh - 0.4} rx={0.12} fill="#E5E1D8" />
+          <rect x={cx + bw * 0.12} y={cy - bh / 2 + 0.2} width={bw * 0.14} height={bh - 0.4} rx={0.12} fill="#E5E1D8" />
+        </>
+      )}
+    </g>
+  );
+}
+
+function GardenShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  // A few trees along the edges; deterministic positions.
+  const trees: [number, number, number][] = [];
+  const step = 4;
+  for (let tx = x + 1.2; tx < x + w - 1; tx += step) {
+    trees.push([tx, y + 1.1, 0.9]);
+    if (h > 5) trees.push([tx + step / 2, y + h - 1.1, 0.8]);
+  }
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} rx={0.3} fill="url(#fp-grass)" stroke={C.grassInk} strokeWidth={0.03} />
+      {trees.slice(0, 14).map(([tx, ty, r], i) => (
+        <g key={i}>
+          <circle cx={tx} cy={ty} r={r} fill="#C7DAB2" stroke={C.grassInk} strokeWidth={0.03} />
+          <circle cx={tx} cy={ty} r={0.08} fill={C.grassInk} />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+function PoolShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  return (
+    <g>
+      <rect x={x - 0.6} y={y - 0.6} width={w + 1.2} height={h + 1.2} rx={0.2} fill="url(#fp-paving)" stroke="#D2CABA" strokeWidth={0.03} />
+      <rect x={x} y={y} width={w} height={h} rx={0.35} fill={C.water} stroke={C.waterInk} strokeWidth={0.08} />
+      <path d={`M ${x + w * 0.2} ${y + h * 0.45} q ${w * 0.08} -0.15 ${w * 0.16} 0 t ${w * 0.16} 0`} fill="none" stroke={C.waterInk} strokeWidth={0.03} opacity={0.6} />
+    </g>
+  );
+}
+
+function DimLine({ x1, y1, x2, y2, label, vertical, s }: { x1: number; y1: number; x2: number; y2: number; label: string; vertical?: boolean; s: number }) {
+  const t = 0.18;
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  return (
+    <g stroke={C.inkSoft} strokeWidth={0.025} pointerEvents="none">
+      <line x1={x1} y1={y1} x2={x2} y2={y2} />
+      {vertical ? (
+        <>
+          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} />
+          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} />
+        </>
+      ) : (
+        <>
+          <line x1={x1 - t} y1={y1 + t} x2={x1 + t} y2={y1 - t} />
+          <line x1={x2 - t} y1={y2 + t} x2={x2 + t} y2={y2 - t} />
+        </>
+      )}
+      <text x={mx} y={my - 0.18} textAnchor="middle" stroke="none" fill={C.inkSoft}
+        transform={vertical ? `rotate(-90 ${mx} ${my})` : undefined}
+        style={{ fontSize: Math.min(0.3, 0.3 * s), fontWeight: 600 }}>
+        {label}
+      </text>
+    </g>
+  );
+}
+
 function labelFor(t: RoomType): string {
-  const map: Record<string, string> = {
+  const map: Partial<Record<RoomType, string>> = {
     master_bedroom: "Master Bedroom",
     toilet: "Powder Room",
     bathroom: "Bathroom",
+    sitout: "Sit-out",
+    dress: "Dress",
+    corridor: "Passage",
+    stair: "Staircase",
   };
   return map[t] ?? t.charAt(0).toUpperCase() + t.slice(1).replace("_", " ");
-}
-
-/** Convert a Polygon to an SVG points attribute string. */
-function polyPoints(poly: Polygon): string {
-  return poly.map(([x, y]) => `${x},${y}`).join(" ");
 }

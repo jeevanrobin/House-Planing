@@ -1,761 +1,566 @@
-import { buildFloorClusters, type Cluster, type RoomSpec } from "./program";
-import { directionOf, vastuRoomScore } from "./vastu";
-import { generateWalls, generatePolygonWalls } from "./walls";
-import {
-  insetPolygon,
-  polygonArea,
-  polygonBBox,
-  subdividePolygon,
-  edgeOnBoundary,
-  polygonEdges,
-} from "./polygon-ops";
-import type {
-  Door,
-  Facing,
-  FloorPlan,
-  PlanResult,
-  Polygon,
-  Rect,
-  Room,
-  Suggestion,
-  WindowMark,
-  Requirements,
-  Zone,
-} from "./types";
-
-const EPS = 0.001;
-// Front → back bands. Service + circulation share a band so small rooms
-// (stair, store) pack in 2D beside the kitchen instead of spanning the whole
-// width as a sliver; service stays adjacent to public (kitchen ↔ dining).
-const BAND_GROUPS: Zone[][] = [["public"], ["service", "circulation"], ["private"], ["outdoor"]];
-
-/** Setback margins (m) scale gently with plot size. */
-function setbacks(req: Requirements) {
-  const base = Math.max(0.9, Math.min(req.plotWidth, req.plotDepth) * 0.08);
-  return { front: base * 1.4, rear: base, side: base };
-}
-
-/** Cardinal direction used to orient the layout (front band). */
-function layoutCardinal(f: Facing): "N" | "S" | "E" | "W" {
-  if (f.includes("N")) return "N";
-  if (f.includes("S")) return "S";
-  return f as "E" | "W";
-}
-
-/* ------------------------------------------------------------------ */
-/* Squarified slicing of weighted items into a rectangle.              */
-/* ------------------------------------------------------------------ */
-interface Placed<T> extends Rect {
-  item: T;
-}
-
-function slice<T extends { weight: number }>(rect: Rect, items: T[]): Placed<T>[] {
-  if (items.length === 0) return [];
-  if (items.length === 1) return [{ ...rect, item: items[0] }];
-
-  const total = items.reduce((a, b) => a + b.weight, 0);
-  let acc = 0;
-  let split = 0;
-  for (let i = 0; i < items.length; i++) {
-    acc += items[i].weight;
-    if (acc >= total / 2) {
-      split = i + 1;
-      break;
-    }
-  }
-  split = Math.min(Math.max(split, 1), items.length - 1);
-  const a = items.slice(0, split);
-  const b = items.slice(split);
-  const frac = a.reduce((x, y) => x + y.weight, 0) / total;
-
-  // Choose the split axis that keeps both children closest to square,
-  // which avoids thin slivers when a small room sits beside a large one.
-  const aspect = (w: number, h: number) =>
-    Math.max(w / Math.max(h, 1e-6), h / Math.max(w, 1e-6));
-  const vWorst = Math.max(aspect(rect.w * frac, rect.h), aspect(rect.w * (1 - frac), rect.h));
-  const hWorst = Math.max(aspect(rect.w, rect.h * frac), aspect(rect.w, rect.h * (1 - frac)));
-
-  if (vWorst <= hWorst) {
-    const wA = rect.w * frac;
-    return [
-      ...slice({ ...rect, w: wA }, a),
-      ...slice({ x: rect.x + wA, y: rect.y, w: rect.w - wA, h: rect.h }, b),
-    ];
-  }
-  const hA = rect.h * frac;
-  return [
-    ...slice({ ...rect, h: hA }, a),
-    ...slice({ x: rect.x, y: rect.y + hA, w: rect.w, h: rect.h - hA }, b),
-  ];
-}
-
 /**
- * Subdivide a cluster's rectangle into its rooms. A bedroom + attached
- * bathroom splits with the bath taking a corner against an exterior side
- * wall (for plumbing + a window), always sharing an edge with the bedroom.
+ * Floor-plan engine (v3).
+ *
+ *  1. Program   – realistic rooms per floor, grouped into front→rear bands.
+ *  2. Sizing    – house width chosen for good proportions; depth follows from
+ *                 room areas, so the house is sized to the brief, not the plot.
+ *  3. Stacking  – every upper floor keeps the staircase exactly above the
+ *                 ground-floor stair.
+ *  4. Variants  – band orderings and a mirror are tried; the best Vastu /
+ *                 daylight score wins.
+ *  5. Site      – house set back from the road; parking, pool and garden are
+ *                 placed in the open yards, outside the house.
  */
-function layoutCluster(rect: Rect, cluster: Cluster, crossLen: number): Placed<RoomSpec>[] {
-  if (cluster.rooms.length === 1) return [{ ...rect, item: cluster.rooms[0] }];
+import {
+  BALCONY_D, groundProgram, upperProgram,
+  type Band, type FloorProgram, type RoomSpec, type Unit,
+} from "./program";
+import { compactUnit, expandBands, fitDepths, layoutBands, packPrivate, passageUnit, privateBands, targetDepth, type Placed } from "./layout";
+import { placeOpenings, sharedWall } from "./openings";
+import {
+  buildableRect, makePlotFrame, planSite, setbacksFor, toWorldRect, type PlotFrame,
+} from "./site";
+import { directionOf, vastuRoomScore } from "./vastu";
+import { generateWalls } from "./walls";
+import type { FloorPlan, PlanResult, Rect, Requirements, Room, Suggestion } from "./types";
 
-  const [bed, bath] = cluster.rooms;
-  const f = Math.max(0.2, Math.min(0.34, bath.weight / cluster.weight));
-  const touchesLeft = rect.x < EPS;
-  const touchesRight = Math.abs(rect.x + rect.w - crossLen) < EPS;
+export { placeOpenings } from "./openings";
 
-  let bathRect: Rect;
-  let bedRect: Rect;
-  if (touchesLeft || touchesRight) {
-    const bw = rect.w * f;
-    if (touchesRight && !touchesLeft) {
-      bathRect = { x: rect.x + rect.w - bw, y: rect.y, w: bw, h: rect.h };
-      bedRect = { x: rect.x, y: rect.y, w: rect.w - bw, h: rect.h };
-    } else {
-      bathRect = { x: rect.x, y: rect.y, w: bw, h: rect.h };
-      bedRect = { x: rect.x + bw, y: rect.y, w: rect.w - bw, h: rect.h };
+const FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor"];
+const OPEN_TYPES = new Set(["sitout", "balcony", "terrace", "parking"]);
+const MAX_HOUSE_W = 24;
+
+/* ------------------------------------------------------------------ */
+/* Floor structures at a given width                                   */
+/* ------------------------------------------------------------------ */
+
+interface FloorStructure {
+  bands: Band[];
+  /** Bands before this index keep their natural depth (stair alignment). */
+  frozen: number;
+}
+
+function openSpec(type: "terrace" | "sitout" | "balcony", label: string, area: number, key: string): RoomSpec {
+  return { key, type, label, zone: "outdoor", area, minW: 1.0, minD: 1.0 };
+}
+
+/** Pad sparse bands with an open terrace / courtyard instead of stretching rooms. */
+function withFiller(band: Band, W: number, label: string, key: string): Band {
+  if (band.fixedD !== undefined || !band.units.length) return band;
+  const d = targetDepth(band, W);
+  const used = band.units.flatMap((u) => u.cols).reduce((a, c) => a + (c.fixedW ?? Math.max(
+    c.rooms.reduce((s, r) => s + r.area, 0) / d,
+    Math.max(...c.rooms.map((r) => r.minW)),
+  )), 0);
+  const spare = W - used;
+  if (spare < 2.2) return band;
+  // Unpinned, so it lands beside the rooms and away from the circulation spine.
+  const filler: Unit = { cols: [{ rooms: [openSpec("terrace", label, spare * d, key)] }] };
+  return { ...band, units: [...band.units, filler] };
+}
+
+/** Open-plan living + dining on wide houses so the living room isn't stretched. */
+function adjustGround(prog: FloorProgram, W: number): FloorProgram {
+  const pub = prog.bands.find((b) => b.kind === "public")!;
+  const svc = prog.bands.find((b) => b.kind === "service")!;
+  const pubArea = pub.units.flatMap((u) => u.cols).flatMap((c) => c.rooms).reduce((a, r) => a + r.area, 0);
+  const dining = svc.units.find((u) => u.cols[0].rooms[0].type === "dining");
+  if (!dining || pubArea / W >= pub.minD * 0.8) return prog;
+  if (pub.units.reduce((a, u) => a + unitMinW(u), 0) + unitMinW(dining) > W) return prog;
+  const bands = prog.bands.map((b) =>
+    b === pub ? { ...b, units: [...b.units, { ...dining, pin: "end" as const }] }
+      : b === svc ? { ...b, units: b.units.filter((u) => u !== dining) } : b);
+  return { ...prog, bands };
+}
+
+const unitMinW = (u: Unit) => u.cols.reduce((a, c) => a + (c.fixedW ?? Math.max(...c.rooms.filter((r) => !r.optional).map((r) => r.minW), 0)), 0);
+const unitArea = (u: Unit) => u.cols.flatMap((c) => c.rooms).filter((r) => !r.optional).reduce((s, r) => s + r.area, 0);
+
+/** Put ground-floor bedrooms beside the living room when the front band has room. */
+function frontBedrooms(prog: FloorProgram, W: number): FloorProgram {
+  const pub = prog.bands.find((b) => b.kind === "public");
+  if (!pub || !prog.privateUnits.length) return prog;
+  const units = [...pub.units];
+  const rest: Unit[] = [];
+  for (const u of prog.privateUnits) {
+    const isBed = u.cols[0].rooms[0].type === "bedroom" || u.cols[0].rooms[0].type === "master_bedroom";
+    let placed = false;
+    for (const v of isBed ? [u, compactUnit(u)] : []) {
+      const trial = [...units, v];
+      // Fits if minimum widths fit and the band wouldn't need to be deeper than allowed.
+      const fitsWidth = trial.reduce((a, t) => a + unitMinW(t), 0) <= W + 1e-6;
+      const fitsDepth = trial.reduce((a, t) => a + unitArea(t), 0) / W <= pub.maxD;
+      if (fitsWidth && fitsDepth) {
+        units.push(v);
+        placed = true;
+        break;
+      }
     }
-  } else if (rect.w >= rect.h) {
-    const bw = rect.w * f;
-    bathRect = { x: rect.x + rect.w - bw, y: rect.y, w: bw, h: rect.h };
-    bedRect = { x: rect.x, y: rect.y, w: rect.w - bw, h: rect.h };
-  } else {
-    const bh = rect.h * f;
-    bathRect = { x: rect.x, y: rect.y + rect.h - bh, w: rect.w, h: bh };
-    bedRect = { x: rect.x, y: rect.y, w: rect.w, h: rect.h - bh };
+    if (!placed) rest.push(u);
   }
-  return [
-    { ...bedRect, item: bed },
-    { ...bathRect, item: bath },
-  ];
+  if (rest.length === prog.privateUnits.length) return prog;
+  return { ...prog, bands: prog.bands.map((b) => (b === pub ? { ...b, units } : b)), privateUnits: rest };
 }
 
-/* ------------------------------------------------------------------ */
-/* Canonical → actual transform (front band placed on facing side).    */
-/* ------------------------------------------------------------------ */
-function makeTransform(fp: Rect, card: "N" | "S" | "E" | "W", depthLen: number) {
-  return (c: Rect): Rect => {
-    switch (card) {
-      case "N":
-        return { x: fp.x + c.x, y: fp.y + c.y, w: c.w, h: c.h };
-      case "S":
-        return { x: fp.x + c.x, y: fp.y + (depthLen - (c.y + c.h)), w: c.w, h: c.h };
-      case "W":
-        return { x: fp.x + c.y, y: fp.y + c.x, w: c.h, h: c.w };
-      case "E":
-        return { x: fp.x + (depthLen - (c.y + c.h)), y: fp.y + c.x, w: c.h, h: c.w };
+function groundStructure(req: Requirements, W: number, porch: boolean, ctx: SiteContext): FloorStructure & { stairBand: number } {
+  const raw = groundProgram(req, porch, ctx.fit);
+  // Tight plots can drop the sit-out (main door straight onto the front wall).
+  const base = ctx.noSitout && !porch ? { ...raw, bands: raw.bands.filter((b) => b.kind !== "sitout"), stairBand: raw.stairBand >= 0 ? raw.stairBand - 1 : -1 } : raw;
+  const prog = adjustGround(frontBedrooms(base, W), W);
+  const { bands, stairBand, overflow: spill } = expandBands(prog, W);
+  // Rooms that didn't fit their band: try the front band, else (powder room /
+  // store with no bedrooms downstairs) leave them out rather than add a hallway.
+  const pubIdx = bands.findIndex((b) => b.kind === "public");
+  const overflow: Unit[] = [];
+  for (const u of spill) {
+    const pub = bands[pubIdx];
+    if (pub && pub.units.reduce((a, x) => a + unitMinW(x), 0) + unitMinW(u) <= W) {
+      bands[pubIdx] = { ...pub, units: [...pub.units, u] };
+      continue;
     }
-  };
-}
-
-/* ------------------------------------------------------------------ */
-/* Vastu: reassign interchangeable rooms to better-matching cells.      */
-/* This optimises the function→cell assignment only; geometry and       */
-/* bedroom/bathroom adjacency are untouched.                            */
-/* ------------------------------------------------------------------ */
-const SWAPPABLE = new Set([
-  "kitchen", "dining", "living", "pooja", "store", "utility", "office", "foyer", "toilet",
-]);
-
-function roomVastu(r: Room, fp: Rect): number {
-  if (!r.idealDir) return 0;
-  return vastuRoomScore(directionOf(r.x + r.w / 2, r.y + r.h / 2, fp), r.idealDir);
-}
-
-function optimizeVastu(rooms: Room[], fp: Rect) {
-  const idx = rooms.map((_, i) => i).filter((i) => SWAPPABLE.has(rooms[i].type));
-  let improved = true;
-  let guard = 0;
-  while (improved && guard++ < 8) {
-    improved = false;
-    for (const a of idx) {
-      for (const b of idx) {
-        if (a >= b) continue;
-        const ra = rooms[a];
-        const rb = rooms[b];
-        const areaA = ra.w * ra.h;
-        const areaB = rb.w * rb.h;
-        if (Math.abs(areaA - areaB) / Math.max(areaA, areaB) > 0.45) continue;
-        const before = roomVastu(ra, fp) + roomVastu(rb, fp);
-        swapFunction(ra, rb);
-        const after = roomVastu(ra, fp) + roomVastu(rb, fp);
-        if (after > before + 1e-9) improved = true;
-        else swapFunction(ra, rb);
-      }
-    }
+    const type = u.cols[0].rooms[0].type;
+    if ((type === "toilet" || type === "store") && !prog.privateUnits.length) continue;
+    overflow.push(u);
   }
-}
-
-function swapFunction(a: Room, b: Room) {
-  [a.type, b.type] = [b.type, a.type];
-  [a.label, b.label] = [b.label, a.label];
-  [a.zone, b.zone] = [b.zone, a.zone];
-  [a.idealDir, b.idealDir] = [b.idealDir, a.idealDir];
-}
-
-const ROOM_IDEAL_POS: Record<string, [number, number]> = {
-  pooja: [1.0, 0.0],          // NE
-  kitchen: [1.0, 1.0],        // SE
-  master_bedroom: [0.0, 1.0], // SW
-  bedroom: [0.0, 0.5],        // W
-  living: [0.5, 0.0],         // N
-  dining: [0.0, 0.5],         // W
-  bathroom: [0.0, 0.0],       // NW
-  toilet: [0.0, 0.0],         // NW
-  stair: [0.0, 1.0],          // SW
-  store: [0.0, 1.0],          // SW
-  office: [0.0, 0.5],         // W
-  parking: [0.0, 0.0],        // NW
-};
-
-function getVastuSortKey(c: Cluster, axis: "x" | "y"): number {
-  const primaryType = c.rooms[0]?.type;
-  const pos = ROOM_IDEAL_POS[primaryType] ?? [0.5, 0.5];
-  return axis === "x" ? pos[0] : pos[1];
-}
-
-/* ------------------------------------------------------------------ */
-/* Layout one floor.                                                    */
-/* ------------------------------------------------------------------ */
-function layoutFloor(fp: Rect, clusters: Cluster[], req: Requirements): Room[] {
-  const card = layoutCardinal(req.facing);
-  const horizontal = card === "E" || card === "W";
-  const crossLen = horizontal ? fp.h : fp.w;
-  const depthLen = horizontal ? fp.w : fp.h;
-  const transform = makeTransform(fp, card, depthLen);
-
-  const byZone = new Map<Zone, Cluster[]>();
-  for (const c of clusters) (byZone.get(c.zone) ?? byZone.set(c.zone, []).get(c.zone)!).push(c);
-
-  const bands = BAND_GROUPS
-    .map((zs) => zs.flatMap((z) => byZone.get(z) ?? []))
-    .filter((g) => g.length > 0);
-  const bandWeight = (g: Cluster[]) => g.reduce((a, c) => a + c.weight, 0);
-  const totalWeight = bands.reduce((a, g) => a + bandWeight(g), 0) || 1;
-
-  const rooms: Room[] = [];
-  let cursor = 0;
-
-  bands.forEach((group, i) => {
-    const isLast = i === bands.length - 1;
-    const bandDepth = isLast ? depthLen - cursor : (bandWeight(group) / totalWeight) * depthLen;
-    const band: Rect = { x: 0, y: cursor, w: crossLen, h: bandDepth };
-
-    // Largest rooms first or Vastu-preferring first → better squarification, fewer slivers.
-    const axis = horizontal ? "y" : "x";
-    const ordered = [...group].sort((p, q) => {
-      if (req.vastu) {
-        const vp = getVastuSortKey(p, axis);
-        const vq = getVastuSortKey(q, axis);
-        if (Math.abs(vp - vq) > 0.01) return vp - vq;
-      }
-      return q.weight - p.weight;
-    });
-    for (const placedCluster of slice(band, ordered)) {
-      const cRect: Rect = { x: placedCluster.x, y: placedCluster.y, w: placedCluster.w, h: placedCluster.h };
-      for (const pr of layoutCluster(cRect, placedCluster.item, crossLen)) {
-        const r = transform({ x: pr.x, y: pr.y, w: pr.w, h: pr.h });
-        rooms.push({
-          ...r,
-          id: `${pr.item.type}-${rooms.length}`,
-          type: pr.item.type,
-          label: pr.item.label,
-          zone: pr.item.zone,
-          idealDir: pr.item.idealDir,
-        });
-      }
-    }
-    cursor += bandDepth;
-  });
-
-  if (req.vastu) optimizeVastu(rooms, fp);
-  return rooms;
-}
-
-/* ------------------------------------------------------------------ */
-/* Doors & windows.                                                     */
-/* ------------------------------------------------------------------ */
-function onBoundary(v: number, edge: number) {
-  return Math.abs(v - edge) < 0.05;
-}
-
-export function placeOpenings(rooms: Room[], fp: Rect) {
-  const doors: Door[] = [];
-  const windows: WindowMark[] = [];
-  const right = fp.x + fp.w;
-  const bottom = fp.y + fp.h;
-
-  for (const room of rooms) {
-    if (room.type === "garden") continue;
-    const edges = [
-      { o: "v" as const, at: room.x, p0: room.y, len: room.h, ext: onBoundary(room.x, fp.x) },
-      { o: "v" as const, at: room.x + room.w, p0: room.y, len: room.h, ext: onBoundary(room.x + room.w, right) },
-      { o: "h" as const, at: room.y, p0: room.x, len: room.w, ext: onBoundary(room.y, fp.y) },
-      { o: "h" as const, at: room.y + room.h, p0: room.x, len: room.w, ext: onBoundary(room.y + room.h, bottom) },
-    ];
-
-    const interior = edges.filter((e) => !e.ext && e.len > 1.0);
-    const doorEdge = (interior.length ? interior : edges).sort((a, b) => b.len - a.len)[0];
-    if (doorEdge) {
-      const dw = Math.min(0.95, doorEdge.len * 0.4);
-      const mid = doorEdge.p0 + doorEdge.len / 2;
-      doors.push({
-        roomId: room.id,
-        orientation: doorEdge.o,
-        width: dw,
-        exterior: room.type === "foyer",
-        x: doorEdge.o === "v" ? doorEdge.at : mid - dw / 2,
-        y: doorEdge.o === "v" ? mid - dw / 2 : doorEdge.at,
-      });
-    }
-
-    const habitable = !["stair", "store", "utility", "parking", "foyer", "corridor"].includes(room.type);
-    if (habitable) {
-      for (const e of edges) {
-        if (e.ext && e.len > 1.6) {
-          const ww = Math.min(1.5, e.len * 0.5);
-          const mid = e.p0 + e.len / 2;
-          windows.push({
-            roomId: room.id,
-            orientation: e.o,
-            width: ww,
-            x: e.o === "v" ? e.at : mid - ww / 2,
-            y: e.o === "v" ? mid - ww / 2 : e.at,
-          });
-        }
-      }
+  // Single-storey "balconies" are decks in the bedroom row, off the hallway.
+  const decks: Unit[] = req.floors === 1
+    ? Array.from({ length: req.balconies }, (_, i) => ({ cols: [{ rooms: [{ ...openSpec("balcony", `Balcony ${i + 1}`, 6, `gbal-${i}`), minW: 1.8, minD: 1.5 }] }] }))
+    : [];
+  const privateUnits = [...overflow, ...prog.privateUnits, ...decks];
+  // The hallway must open onto a living space: if the band just in front of it
+  // has none (e.g. the kitchen row spilled over), run a passage through it.
+  const ACCESSIBLE = new Set(["dining", "living", "lounge", "stair", "corridor"]);
+  if (privateUnits.length) {
+    const last = bands[bands.length - 1];
+    const types = last.units.flatMap((u) => u.cols).flatMap((c) => c.rooms).map((r) => r.type);
+    if (last.fixedD === undefined && !types.some((t) => ACCESSIBLE.has(t))) {
+      bands[bands.length - 1] = { ...last, units: [...last.units, passageUnit()] };
     }
   }
-  return { doors, windows };
+  const priv = privateBands(privateUnits, W).map((b, i) =>
+    b.kind === "private" && !b.corridorBehind ? withFiller(b, W, "Courtyard", `court-${i}`) : b);
+  const all = [...bands, ...priv];
+  // Absorbs extra depth when an upper floor is deeper than the ground floor.
+  all.push({ kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Court", 0, "gcourt")] }] }], minD: 0, maxD: 99 });
+  // Bands up to the stair keep their natural depth so the stair stacks.
+  return { bands: all, frozen: stairBand + 1, stairBand };
+}
+
+function upperStructure(req: Requirements, floor: number, W: number, stairY: number, stairD: number, fit: number): FloorStructure {
+  const prog = upperProgram(req, floor, fit);
+  const balcony = prog.bands.find((b) => b.kind === "balcony");
+  const stair = prog.bands[prog.stairBand];
+  const useBalcony = !!balcony && stairY - BALCONY_D >= 3.0;
+  const frontD = stairY - (useBalcony ? BALCONY_D : 0);
+
+  const rows = packPrivate(prog.privateUnits, W);
+  const frontUnits = frontD >= 3.0 ? rows[0] ?? [] : [];
+  // Compact variants are copies, so match units by their first room.
+  const frontKeys = new Set(frontUnits.map((u) => u.cols[0].rooms[0].key));
+  const rearUnits = prog.privateUnits.filter((u) => !frontKeys.has(u.cols[0].rooms[0].key));
+
+  const bands: Band[] = [];
+  if (useBalcony) {
+    const n = (balcony!.units.length);
+    bands.push({ ...balcony!, units: Array.from({ length: n }, (_, i) => ({ cols: [{ rooms: [openSpec("balcony", n > 1 ? `Balcony ${i + 1}` : "Balcony", 6, `bal-${floor}-${i}`)] }] })) });
+  }
+  const front: Band = frontUnits.length
+    ? withFiller({ kind: "front", units: frontUnits, fixedD: frontD, minD: frontD, maxD: frontD }, W, "Open Terrace", `fterr-${floor}`)
+    : { kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", W * frontD, `fterr-${floor}`)] }] }], fixedD: frontD, minD: frontD, maxD: frontD };
+  if (frontD > 0.3) bands.push(front);
+  bands.push({ ...stair, fixedD: stairD, minD: stairD, maxD: stairD });
+
+  const rear = privateBands(rearUnits, W).map((b, i) =>
+    b.kind === "private" && !b.corridorBehind ? withFiller(b, W, "Open Terrace", `rterr-${floor}-${i}`) : b);
+  const frozen = bands.length;
+  bands.push(...rear);
+  // Unbalanced balconies (front didn't fit): keep the count at the rear.
+  if (balcony && !useBalcony) {
+    bands.push({ ...balcony, units: balcony.units.map((_, i) => ({ cols: [{ rooms: [openSpec("balcony", `Balcony ${i + 1}`, 6, `rbal-${floor}-${i}`)] }] })) });
+  }
+  // Spare depth behind the rooms becomes an open terrace over the floor below.
+  bands.push({ kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", 0, `bterr-${floor}`)] }] }], minD: 0, maxD: 99 });
+  return { bands, frozen };
+}
+
+const sumDepth = (bands: Band[], W: number) => bands.reduce((a, b) => a + targetDepth(b, W), 0);
+
+interface Candidate {
+  W: number;
+  D: number;
+  porch: boolean;
+  ground: FloorStructure & { stairBand: number };
+  uppers: FloorStructure[];
+  cost: number;
+}
+
+/** Depth an upper floor needs in front of the stair for its street-facing rooms. */
+function upperFrontNeed(req: Requirements, floor: number, W: number, fit: number): number {
+  const prog = upperProgram(req, floor, fit);
+  const front = packPrivate(prog.privateUnits, W)[0];
+  if (!front?.length) return 0;
+  const d = targetDepth({ kind: "front", units: front, minD: 3.0, maxD: 5.0 }, W);
+  return d + (prog.bands.some((b) => b.kind === "balcony") ? BALCONY_D : 0);
+}
+
+/** How far the laid-out rooms fall short of (or overshoot) their targets. */
+function roomPenalty(placed: Placed[]): number {
+  let p = 0;
+  for (const r of placed) {
+    const spec = r.spec;
+    if (spec.area <= 0 || spec.type === "terrace" || spec.type === "corridor") continue;
+    const ratio = (r.w * r.h) / spec.area;
+    if (ratio < 1) p += (1 - ratio) ** 2 * 4;
+    if (ratio > 1.35) p += (ratio - 1.35) * 1.5;
+    if (r.w < spec.minW - 0.05) p += 1 + (spec.minW - r.w);
+    if (r.h < spec.minD - 0.05) p += 1 + (spec.minD - r.h);
+  }
+  return p;
+}
+
+/** Plot-local house rectangle for a width/depth, leaving the front yard for cars. */
+function houseRect(build: Rect, W: number, D: number, req: Requirements, mirror: boolean): Rect {
+  const wantFront = req.parking > 0 ? Math.max(0, 5.6 - build.y) : 0;
+  const y = build.y + Math.max(0, Math.min(wantFront, build.h - D));
+  const spare = build.w - W;
+  const x = spare < 3 ? build.x + spare / 2 : mirror ? build.x + spare : build.x;
+  return { x, y, w: W, h: D };
+}
+
+function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: boolean): Candidate {
+  const ground = groundStructure(req, W, porch, ctx);
+  const si = ground.stairBand;
+  if (si >= 0) {
+    // Deepen the front of the ground floor if upper floors need it for their bedrooms.
+    const depths = ground.bands.map((b) => targetDepth(b, W));
+    const stairY = depths.slice(0, si).reduce((a, b) => a + b, 0);
+    let need = 0;
+    for (let f = 1; f < req.floors; f++) need = Math.max(need, upperFrontNeed(req, f, W, ctx.fit));
+    const grow = Math.min(need - stairY, 3);
+    const j = ground.bands.slice(0, si).map((b, i) => (b.fixedD === undefined && b.units.length ? i : -1)).filter((i) => i >= 0).pop();
+    if (grow > 0.05 && j !== undefined) {
+      const nd = depths[j] + grow;
+      ground.bands[j] = { ...ground.bands[j], fixedD: nd, minD: nd, maxD: nd };
+    }
+  }
+  const gDepths = ground.bands.map((b) => targetDepth(b, W));
+  const gTotal = gDepths.reduce((a, b) => a + b, 0);
+  const stairY = si >= 0 ? gDepths.slice(0, si).reduce((a, b) => a + b, 0) : 0;
+  const stairD = si >= 0 ? gDepths[si] : 0;
+
+  const uppers: FloorStructure[] = [];
+  let D = gTotal;
+  for (let f = 1; f < req.floors; f++) {
+    const st = upperStructure(req, f, W, stairY, stairD, ctx.fit);
+    uppers.push(st);
+    D = Math.max(D, sumDepth(st.bands, W));
+  }
+
+  const Dfit = Math.min(D, ctx.build.h);
+  const k = Dfit / D;
+  const structures = [ground, ...uppers];
+  const rooms = structures.reduce((a, st) => {
+    const { rooms: placed } = layoutBands(st.bands, fitDepths(st.bands, W, D, st.frozen), W, () => false);
+    return a + roomPenalty(placed.map((p) => ({ ...p, y: p.y * k, h: p.h * k })));
+  }, 0);
+  const filler = structures.flatMap((st) => st.bands).flatMap((b) => b.units).flatMap((u) => u.cols)
+    .flatMap((c) => c.rooms).filter((r) => r.type === "terrace").reduce((a, r) => a + r.area, 0);
+  const siteReq = porch ? { ...req, parking: 0 as const } : req;
+  // A missing car (that the user asked for) is costly; pool/garden less so.
+  const siteWarnings = planSite(ctx.frame, houseRect(ctx.build, W, Dfit, siteReq, false), siteReq, ctx.sb).warnings;
+  const site = siteWarnings.reduce((a, w) => a + (w.includes("car space") ? 3.5 : 1), 0);
+  const over = Math.max(0, D - ctx.build.h);
+  const aspect = Math.abs(Math.log(D / W / 1.15));
+  // A yard parking spot is preferred; a porch must earn its place.
+  const cost = over * 40 + rooms * 3 + aspect * 4 + (filler / (W * D)) * 12 + site * 10 + (porch ? 4 : 0);
+  return { W, D, porch, ground, uppers, cost };
+}
+
+interface SiteContext {
+  frame: PlotFrame;
+  build: Rect;
+  sb: ReturnType<typeof setbacksFor>;
+  /** Room-size multiplier (1 = brief as given; lower = compact rooms for tight plots). */
+  fit: number;
+  noSitout?: boolean;
+}
+
+/** Best house width (and parking strategy) for a given room-size multiplier. */
+function chooseCandidate(req: Requirements, ctx: SiteContext): Candidate {
+  const maxW = Math.min(ctx.build.w, MAX_HOUSE_W);
+  let best: Candidate | null = null;
+  for (let W = Math.min(6, maxW); W <= maxW + 1e-9; W += 0.25) {
+    for (const porch of req.parking > 0 ? [false, true] : [false]) {
+      const c = evaluateWidth(req, W, ctx, porch);
+      if (!best || c.cost < best.cost) best = c;
+    }
+  }
+  return best!;
 }
 
 /* ------------------------------------------------------------------ */
-/* Metrics & Vastu.                                                     */
+/* Scoring & placement                                                 */
 /* ------------------------------------------------------------------ */
+
 function computeVastu(rooms: Room[], fp: Rect): number {
   const scored = rooms.filter((r) => r.idealDir);
   if (!scored.length) return 100;
-  let sum = 0;
-  for (const r of scored) {
-    const dir = directionOf(r.x + r.w / 2, r.y + r.h / 2, fp);
-    sum += vastuRoomScore(dir, r.idealDir!);
-  }
+  const sum = scored.reduce((a, r) => a + vastuRoomScore(directionOf(r.x + r.w / 2, r.y + r.h / 2, fp), r.idealDir!), 0);
   return Math.round((sum / scored.length) * 100);
 }
 
-function floorMetrics(rooms: Room[], fp: Rect) {
-  const builtUpArea = fp.w * fp.h;
-  const efficiency = Math.max(0.78, Math.min(0.9, 0.92 - rooms.length * 0.0045));
+function touchesBoundary(r: Rect, fp: Rect): boolean {
+  const e = 0.02;
+  return Math.abs(r.x - fp.x) < e || Math.abs(r.y - fp.y) < e
+    || Math.abs(r.x + r.w - (fp.x + fp.w)) < e || Math.abs(r.y + r.h - (fp.y + fp.h)) < e;
+}
+
+/** Daylight: an outside wall, or a wall onto a sit-out / balcony / terrace. */
+function hasDaylight(r: Room, rooms: Room[], fp: Rect): boolean {
+  return touchesBoundary(r, fp) || rooms.some((o) => OPEN_TYPES.has(o.type) && !!sharedWall(r, o));
+}
+
+function floorScore(rooms: Room[], fp: Rect, req: Requirements): number {
+  const beds = rooms.filter((r) => r.type === "bedroom" || r.type === "master_bedroom");
+  const lit = beds.length ? beds.filter((b) => hasDaylight(b, rooms, fp)).length / beds.length : 1;
+  const kitchen = rooms.find((r) => r.type === "kitchen");
+  const kitchenLit = kitchen && touchesBoundary(kitchen, fp) ? 1 : 0;
+  return (req.vastu ? computeVastu(rooms, fp) / 100 : 0) + 0.25 * lit + 0.1 * kitchenLit;
+}
+
+interface Placement {
+  frame: PlotFrame;
+  /** House rectangle in plot-local coordinates. */
+  local: Rect;
+  mirror: boolean;
+  /** House footprint in world coordinates. */
+  world: Rect;
+}
+
+function toRooms(placed: Placed[], p: Placement, W: number): Room[] {
+  const keyToId = new Map(placed.map((pl) => [pl.spec.key, pl.spec.key]));
+  return placed.map((pl) => {
+    const lx = p.mirror ? W - pl.x - pl.w : pl.x;
+    const world = toWorldRect(p.frame, { x: p.local.x + lx, y: p.local.y + pl.y, w: pl.w, h: pl.h });
+    return {
+      id: pl.spec.key,
+      type: pl.spec.type,
+      label: pl.spec.label,
+      zone: pl.spec.zone,
+      idealDir: pl.spec.idealDir,
+      parentId: pl.spec.parentKey && keyToId.has(pl.spec.parentKey) ? pl.spec.parentKey : undefined,
+      ...world,
+    };
+  });
+}
+
+/** All band-reversal combinations worth trying for a floor (capped). */
+function reversalSets(bands: Band[]): boolean[][] {
+  const flippable = bands.map((b, i) => (b.units.filter((u) => !u.pin).length > 1 ? i : -1)).filter((i) => i >= 0).slice(0, 4);
+  const sets: boolean[][] = [];
+  for (let m = 0; m < 1 << flippable.length; m++) {
+    const rev = bands.map(() => false);
+    flippable.forEach((bi, k) => { rev[bi] = !!(m & (1 << k)); });
+    sets.push(rev);
+  }
+  return sets;
+}
+
+/**
+ * Lay a floor out at its natural depth D, then scale depths by `k` (< 1 only
+ * when the plot is too shallow — every floor scales alike, so stairs still stack).
+ */
+function bestFloor(s: FloorStructure, W: number, D: number, k: number, p: Placement, req: Requirements): { rooms: Room[]; score: number } {
+  const depths = fitDepths(s.bands, W, D, s.frozen).map((d) => d * k);
+  let best: { rooms: Room[]; score: number } | null = null;
+  for (const rev of reversalSets(s.bands)) {
+    const { rooms: placed } = layoutBands(s.bands, depths, W, (_, i) => rev[i]);
+    const rooms = toRooms(placed, p, W);
+    const score = floorScore(rooms, p.world, req);
+    if (!best || score > best.score + 1e-9) best = { rooms, score };
+  }
+  return best!;
+}
+
+/* ------------------------------------------------------------------ */
+/* Metrics, suggestions, validation                                    */
+/* ------------------------------------------------------------------ */
+
+function floorMetrics(rooms: Room[], fp: Rect, walls: ReturnType<typeof generateWalls>) {
+  const open = rooms.filter((r) => r.type === "terrace").reduce((a, r) => a + r.w * r.h, 0);
+  const builtUpArea = fp.w * fp.h - open;
+  const indoor = rooms.filter((r) => !OPEN_TYPES.has(r.type)).reduce((a, r) => a + r.w * r.h, 0);
+  const wallArea = walls.filter((w) => w.type !== "railing")
+    .reduce((a, w) => a + Math.hypot(w.x2 - w.x1, w.y2 - w.y1) * w.thickness, 0);
+  const carpetArea = Math.max(0, indoor - wallArea);
   return {
     builtUpArea,
-    carpetArea: builtUpArea * efficiency,
-    efficiency,
+    carpetArea,
+    efficiency: builtUpArea > 0 ? carpetArea / builtUpArea : 0,
     perimeter: 2 * (fp.w + fp.h),
     vastuScore: computeVastu(rooms, fp),
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* Suggestions.                                                         */
-/* ------------------------------------------------------------------ */
-function buildSuggestions(plan: PlanResult, req: Requirements): Suggestion[] {
-  const out: Suggestion[] = [];
-  const ground = plan.floors[0];
+export function planVastuScore(plan: PlanResult): number {
+  return Math.round(plan.floors.reduce((a, f) => a + f.metrics.vastuScore, 0) / plan.floors.length);
+}
 
-  const right = plan.footprint.x + plan.footprint.w;
-  const bottom = plan.footprint.y + plan.footprint.h;
+function buildSuggestions(plan: PlanResult, req: Requirements, siteWarnings: string[]): Suggestion[] {
+  const out: Suggestion[] = [];
+  const fp = plan.footprint;
   let blind = 0;
-  for (const f of plan.floors)
-    for (const r of f.rooms)
-      if (r.type === "bedroom" || r.type === "master_bedroom") {
-        const hasExt =
-          onBoundary(r.x, plan.footprint.x) ||
-          onBoundary(r.x + r.w, right) ||
-          onBoundary(r.y, plan.footprint.y) ||
-          onBoundary(r.y + r.h, bottom);
-        if (!hasExt) blind++;
-      }
+  for (const f of plan.floors) {
+    for (const r of f.rooms) {
+      if ((r.type === "bedroom" || r.type === "master_bedroom") && !hasDaylight(r, f.rooms, fp)) blind++;
+    }
+  }
   out.push(
     blind === 0
-      ? { kind: "ventilation", severity: "good", message: "Every bedroom has at least one external wall for cross-ventilation and daylight." }
-      : { kind: "ventilation", severity: "warn", message: `${blind} bedroom(s) are landlocked — consider a light shaft or rearranging to an outer wall.` },
+      ? { kind: "ventilation", severity: "good", message: "Every bedroom has an outside wall for daylight and cross-ventilation." }
+      : { kind: "ventilation", severity: "warn", message: `${blind} bedroom(s) have no outside wall — consider a light well or a narrower, deeper house.` },
   );
 
-  const avgVastu = Math.round(
-    plan.floors.reduce((a, f) => a + f.metrics.vastuScore, 0) / plan.floors.length,
-  );
-  out.push({
-    kind: "vastu",
-    severity: avgVastu >= 75 ? "good" : avgVastu >= 55 ? "info" : "warn",
-    message: `Vastu compliance score: ${avgVastu}/100${avgVastu >= 75 ? " — strong alignment with directional principles." : " — kitchen/master placement could be tuned for a higher score."}`,
-  });
+  const vastu = planVastuScore(plan);
+  if (req.vastu) {
+    out.push({
+      kind: "vastu",
+      severity: vastu >= 75 ? "good" : vastu >= 55 ? "info" : "warn",
+      message: `Vastu compliance ${vastu}/100${vastu >= 75 ? " — strong alignment with directional principles." : " — the road-facing direction limits kitchen/master placement; try the editor to fine-tune."}`,
+    });
+  }
 
+  const built = plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0);
+  const coverage = (fp.w * fp.h) / plan.plotArea;
   out.push({
     kind: "space",
-    severity: ground.metrics.efficiency >= 0.85 ? "good" : "info",
-    message: `Carpet-area efficiency ≈ ${Math.round(ground.metrics.efficiency * 100)}%. Built-up ${Math.round(plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0))} m² across ${plan.floors.length} floor(s).`,
+    severity: coverage <= 0.65 ? "good" : "info",
+    message: `House footprint ${Math.round(fp.w * fp.h)} m² (${Math.round(coverage * 100)}% ground coverage), ${Math.round(built)} m² built-up across ${plan.floors.length} floor(s).`,
   });
 
-  if (req.floors > 1)
-    out.push({ kind: "circulation", severity: "info", message: "Staircase is stacked vertically across floors for an efficient structural core." });
+  if (req.floors > 1) {
+    out.push({ kind: "circulation", severity: "info", message: "The staircase sits in the same spot on every floor, so it stacks as one structural core." });
+  }
+  for (const w of siteWarnings) out.push({ kind: "space", severity: "warn", message: w });
 
   const rate = { economy: 1400, standard: 1900, premium: 2600, luxury: 3600 }[req.budget];
-  const totalArea = plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0);
   out.push({
     kind: "cost",
     severity: "info",
-    message: `Indicative construction estimate ≈ ₹${(totalArea * 10.7639 * rate).toLocaleString("en-IN", { maximumFractionDigits: 0 })} at ${req.budget} finish (≈₹${rate}/ft²).`,
+    message: `Indicative construction estimate ≈ ₹${(built * 10.7639 * rate).toLocaleString("en-IN", { maximumFractionDigits: 0 })} at ${req.budget} finish (≈₹${rate}/ft² of built-up area).`,
   });
-
   return out;
 }
 
-/* ------------------------------------------------------------------ */
-/* Polygon-mode: layout rooms within an arbitrary polygon.              */
-/* ------------------------------------------------------------------ */
-function layoutFloorPoly(
-  fpPoly: Polygon,
-  clusters: Cluster[],
-  req: Requirements,
-): Room[] {
-  const fpBBox = polygonBBox(fpPoly);
-  const card = layoutCardinal(req.facing);
-  const horizontal = card === "E" || card === "W";
-
-  const byZone = new Map<Zone, Cluster[]>();
-  for (const c of clusters) (byZone.get(c.zone) ?? byZone.set(c.zone, []).get(c.zone)!).push(c);
-
-  const bands = BAND_GROUPS
-    .map((zs) => zs.flatMap((z) => byZone.get(z) ?? []))
-    .filter((g) => g.length > 0);
-  const bandWeight = (g: Cluster[]) => g.reduce((a, c) => a + c.weight, 0);
-
-  // Split the footprint polygon into band polygons (front → back).
-  const bandWeights = bands.map(bandWeight);
-  // Axis: for N/S facing, split along Y; for E/W, split along X.
-  const splitAxis = horizontal ? "x" : "y";
-  // For S/W facing, reverse the band order (front band at the high end).
-  const needsReverse = card === "S" || card === "W";
-  const orderedWeights = needsReverse ? [...bandWeights].reverse() : bandWeights;
-  let bandPolys = subdividePolygon(fpPoly, orderedWeights, splitAxis);
-  if (needsReverse) bandPolys = bandPolys.reverse();
-
-  const rooms: Room[] = [];
-
-  bands.forEach((group, i) => {
-    const bandPoly = bandPolys[i] ?? fpPoly;
-    const innerAxis = splitAxis === "y" ? "x" : "y";
-
-    const ordered = [...group].sort((p, q) => {
-      if (req.vastu) {
-        const vp = getVastuSortKey(p, innerAxis);
-        const vq = getVastuSortKey(q, innerAxis);
-        if (Math.abs(vp - vq) > 0.01) return vp - vq;
-      }
-      return q.weight - p.weight;
-    });
-
-    // Split band polygon into cluster polygons.
-    const clusterWeights = ordered.map((c) => c.weight);
-    const clusterPolys = subdividePolygon(bandPoly, clusterWeights, innerAxis);
-
-    ordered.forEach((cluster, ci) => {
-      const cPoly = clusterPolys[ci] ?? bandPoly;
-
-      if (cluster.rooms.length === 1) {
-        const spec = cluster.rooms[0];
-        const bbox = polygonBBox(cPoly);
-        rooms.push({
-          ...bbox,
-          id: `${spec.type}-${rooms.length}`,
-          type: spec.type,
-          label: spec.label,
-          zone: spec.zone,
-          idealDir: spec.idealDir,
-          polygon: cPoly,
-        });
-      } else {
-        // Bedroom + bathroom cluster: split into two sub-polygons.
-        const [bed, bath] = cluster.rooms;
-        const f = Math.max(0.2, Math.min(0.34, bath.weight / cluster.weight));
-        const subPolys = subdividePolygon(cPoly, [1 - f, f], innerAxis);
-
-        for (let k = 0; k < 2; k++) {
-          const spec = k === 0 ? bed : bath;
-          const sp = subPolys[k] ?? cPoly;
-          const bbox = polygonBBox(sp);
-          rooms.push({
-            ...bbox,
-            id: `${spec.type}-${rooms.length}`,
-            type: spec.type,
-            label: spec.label,
-            zone: spec.zone,
-            idealDir: spec.idealDir,
-            polygon: sp,
-          });
-        }
-      }
-    });
-  });
-
-  if (req.vastu) optimizeVastu(rooms, fpBBox);
-  return rooms;
-}
-
-/* ------------------------------------------------------------------ */
-/* Polygon-mode: doors & windows using polygon edges.                   */
-/* ------------------------------------------------------------------ */
-export function placeOpeningsPoly(
-  rooms: Room[],
-  fpPoly: Polygon,
-): { doors: Door[]; windows: WindowMark[] } {
-  const doors: Door[] = [];
-  const windows: WindowMark[] = [];
-
-  for (const room of rooms) {
-    if (room.type === "garden") continue;
-    const rp = room.polygon;
-    if (!rp || rp.length < 3) continue;
-
-    const edges = polygonEdges(rp);
-    const classified = edges.map((e) => ({
-      ...e,
-      ext: edgeOnBoundary(e.x1, e.y1, e.x2, e.y2, fpPoly),
-    }));
-
-    // Door: prefer longest interior edge.
-    const interior = classified.filter((e) => !e.ext && e.length > 1.0);
-    const doorEdge = (interior.length ? interior : classified).sort((a, b) => b.length - a.length)[0];
-    if (doorEdge) {
-      const dw = Math.min(0.95, doorEdge.length * 0.4);
-      const mx = (doorEdge.x1 + doorEdge.x2) / 2;
-      const my = (doorEdge.y1 + doorEdge.y2) / 2;
-      doors.push({
-        roomId: room.id,
-        orientation: doorEdge.orientation,
-        width: dw,
-        exterior: room.type === "foyer",
-        x: doorEdge.orientation === "v" ? doorEdge.x1 : mx - dw / 2,
-        y: doorEdge.orientation === "v" ? my - dw / 2 : doorEdge.y1,
-      });
-    }
-
-    // Windows on exterior edges.
-    const habitable = !["stair", "store", "utility", "parking", "foyer", "corridor"].includes(room.type);
-    if (habitable) {
-      for (const e of classified) {
-        if (e.ext && e.length > 1.6) {
-          const ww = Math.min(1.5, e.length * 0.5);
-          const mx = (e.x1 + e.x2) / 2;
-          const my = (e.y1 + e.y2) / 2;
-          windows.push({
-            roomId: room.id,
-            orientation: e.orientation,
-            width: ww,
-            x: e.orientation === "v" ? e.x1 : mx - ww / 2,
-            y: e.orientation === "v" ? my - ww / 2 : e.y1,
-          });
-        }
-      }
-    }
-  }
-  return { doors, windows };
-}
-
-/* ------------------------------------------------------------------ */
-/* Public API.                                                          */
-/* ------------------------------------------------------------------ */
-const FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor"];
-
-export function generatePlan(req: Requirements): PlanResult {
-  const sb = setbacks(req);
-  const hasPolygon = req.plotPolygon && req.plotPolygon.length >= 3;
-
-  // ── Polygon mode ──
-  if (hasPolygon) {
-    const plotPoly = req.plotPolygon!;
-    const avgSetback = (sb.front + sb.rear + sb.side) / 3;
-    const fpPoly = insetPolygon(plotPoly, avgSetback);
-    const fpBBox = polygonBBox(fpPoly);
-    const plotArea = polygonArea(plotPoly);
-
-    const floors: FloorPlan[] = [];
-    for (let i = 0; i < req.floors; i++) {
-      const clusters = buildFloorClusters(req, i, polygonArea(fpPoly));
-      const rooms = layoutFloorPoly(fpPoly, clusters, req);
-      const { doors, windows } = placeOpeningsPoly(rooms, fpPoly);
-      floors.push({
-        floor: i,
-        name: FLOOR_NAMES[i] ?? `Floor ${i}`,
-        footprint: fpBBox,
-        footprintPolygon: fpPoly,
-        rooms,
-        doors,
-        windows,
-        walls: generatePolygonWalls(rooms, fpPoly),
-        metrics: floorMetricsPoly(rooms, fpPoly, fpBBox),
-      });
-    }
-
-    const result: PlanResult = {
-      plotArea,
-      plotPolygon: plotPoly,
-      footprint: fpBBox,
-      setback: sb,
-      floors,
-      suggestions: [],
-    };
-    result.suggestions = buildSuggestions(result, req);
-    result.validation = validatePlanRequirements(result, req);
-    return result;
-  }
-
-  // ── Rectangular mode (original) ──
-  const footprint: Rect = {
-    x: sb.side,
-    y: sb.front,
-    w: Math.max(3, req.plotWidth - sb.side * 2),
-    h: Math.max(3, req.plotDepth - sb.front - sb.rear),
-  };
-
-  const floors: FloorPlan[] = [];
-  for (let i = 0; i < req.floors; i++) {
-    const clusters = buildFloorClusters(req, i, footprint.w * footprint.h);
-    const rooms = layoutFloor(footprint, clusters, req);
-    const { doors, windows } = placeOpenings(rooms, footprint);
-    floors.push({
-      floor: i,
-      name: FLOOR_NAMES[i] ?? `Floor ${i}`,
-      footprint,
-      rooms,
-      doors,
-      windows,
-      walls: generateWalls(rooms, footprint),
-      metrics: floorMetrics(rooms, footprint),
-    });
-  }
-
-  const result: PlanResult = {
-    plotArea: req.plotWidth * req.plotDepth,
-    footprint,
-    setback: sb,
-    floors,
-    suggestions: [],
-  };
-  result.suggestions = buildSuggestions(result, req);
-  result.validation = validatePlanRequirements(result, req);
-  return result;
-}
-
-const MIN_ROOM_AREA: Record<string, number> = {
-  foyer: 2.0,
-  living: 10.0,
-  dining: 6.0,
-  kitchen: 5.0,
-  toilet: 1.5,
-  pooja: 1.5,
-  office: 6.0,
-  stair: 4.0,
-  corridor: 2.0,
-  store: 1.5,
-  utility: 2.0,
-  master_bedroom: 10.0,
-  bedroom: 8.0,
-  bathroom: 2.5,
-  parking: 11.0,
-  balcony: 2.0,
-  garden: 5.0,
-  pool: 8.0,
+const MIN_ROOM_AREA: Partial<Record<string, number>> = {
+  living: 10, lounge: 8, dining: 6, kitchen: 5, toilet: 1.5, pooja: 1.5, office: 6, stair: 7,
+  store: 1.2, utility: 1.2, master_bedroom: 10, bedroom: 8, bathroom: 2.5, dress: 1.2,
 };
 
 export function validatePlanRequirements(plan: PlanResult, req: Requirements): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
-
-  let bedroomCount = 0;
-  let bathroomCount = 0;
-  let parkingCount = 0;
-  let balconyCount = 0;
-  let hasGarden = false;
-  let hasPool = false;
-  let hasOffice = false;
-
-  for (const floor of plan.floors) {
-    for (const room of floor.rooms) {
-      if (room.type === "bedroom" || room.type === "master_bedroom") {
-        bedroomCount++;
-      }
-      if (room.type === "bathroom") {
-        bathroomCount++;
-      }
-      if (room.type === "parking") {
-        parkingCount++;
-      }
-      if (room.type === "balcony" && room.label.includes("Balcony")) {
-        balconyCount++;
-      }
-      if (room.type === "garden" && room.label === "Garden") {
-        hasGarden = true;
-      }
-      if (room.type === "pool") {
-        hasPool = true;
-      }
-      if (room.type === "office") {
-        hasOffice = true;
-      }
-
-      // Check min area
-      const area = room.w * room.h;
-      const minArea = MIN_ROOM_AREA[room.type] ?? 2.0;
-      if (area < minArea) {
-        errors.push(`${room.label} is too small (${area.toFixed(1)} m², minimum is ${minArea} m²).`);
-      }
+  const all = plan.floors.flatMap((f) => f.rooms);
+  for (const room of all) {
+    const min = MIN_ROOM_AREA[room.type];
+    const area = room.w * room.h;
+    if (min !== undefined && area < min) {
+      errors.push(`${room.label} is too small (${area.toFixed(1)} m², minimum is ${min} m²).`);
+    }
+    if (!OPEN_TYPES.has(room.type) && room.type !== "corridor" && Math.min(room.w, room.h) < 0.9) {
+      errors.push(`${room.label} is too narrow (${Math.min(room.w, room.h).toFixed(2)} m).`);
     }
   }
-
-  if (bedroomCount !== req.bedrooms) {
-    errors.push(`Expected ${req.bedrooms} bedrooms, but generated ${bedroomCount}.`);
-  }
-  if (bathroomCount !== req.bathrooms) {
-    errors.push(`Expected ${req.bathrooms} bathrooms, but generated ${bathroomCount}.`);
-  }
-  if (parkingCount !== req.parking) {
-    errors.push(`Expected ${req.parking} parking spaces, but generated ${parkingCount}.`);
-  }
-  if (balconyCount !== req.balconies) {
-    errors.push(`Expected ${req.balconies} balconies, but generated ${balconyCount}.`);
-  }
-  if (req.garden && !hasGarden) {
-    errors.push("Garden was requested but not generated.");
-  }
-  if (req.pool && !hasPool) {
-    errors.push("Swimming Pool was requested but not generated.");
-  }
-  if (req.homeOffice && !hasOffice) {
-    errors.push("Home Office was requested but not generated.");
-  }
-
-  return {
-    ok: errors.length === 0,
-    errors,
-  };
+  const count = (pred: (r: Room) => boolean) => all.filter(pred).length;
+  const beds = count((r) => r.type === "bedroom" || r.type === "master_bedroom");
+  const baths = count((r) => r.type === "bathroom");
+  if (beds !== req.bedrooms) errors.push(`Expected ${req.bedrooms} bedrooms, but generated ${beds}.`);
+  if (baths !== req.bathrooms) errors.push(`Expected ${req.bathrooms} bathrooms, but generated ${baths}.`);
+  if (req.homeOffice && !count((r) => r.type === "office")) errors.push("Home Office was requested but not generated.");
+  return { ok: errors.length === 0, errors };
 }
 
 /* ------------------------------------------------------------------ */
-/* Metrics for polygon mode.                                            */
+/* Entry point                                                         */
 /* ------------------------------------------------------------------ */
-function floorMetricsPoly(rooms: Room[], fpPoly: Polygon, fpBBox: Rect) {
-  const builtUpArea = polygonArea(fpPoly);
-  const efficiency = Math.max(0.78, Math.min(0.9, 0.92 - rooms.length * 0.0045));
-  // Perimeter of footprint polygon.
-  let perimeter = 0;
-  for (let i = 0; i < fpPoly.length; i++) {
-    const [x1, y1] = fpPoly[i];
-    const [x2, y2] = fpPoly[(i + 1) % fpPoly.length];
-    perimeter += Math.hypot(x2 - x1, y2 - y1);
+
+export function generatePlan(req: Requirements): PlanResult {
+  const frame = makePlotFrame(req);
+  const sb = setbacksFor(frame.pw, frame.pd);
+  const build = buildableRect(frame, sb);
+
+  // 1–2. Pick the house width. If the brief doesn't fit, compact step by step:
+  // slightly smaller rooms first, then drop the sit-out, then smaller again.
+  const attempts: { fit: number; noSitout: boolean }[] = [
+    { fit: 1, noSitout: false }, { fit: 0.9, noSitout: false }, { fit: 1, noSitout: true },
+    { fit: 0.9, noSitout: true }, { fit: 0.8, noSitout: false }, { fit: 0.8, noSitout: true },
+    { fit: 0.72, noSitout: true },
+  ];
+  let cand: Candidate | null = null;
+  let fit = 1;
+  for (const a of attempts) {
+    const next = chooseCandidate(req, { frame, build, sb, ...a });
+    if (!cand || next.D < cand.D - 0.05) { cand = next; fit = a.fit; }
+    if (cand.D <= build.h + 0.05) break;
   }
-  return {
-    builtUpArea,
-    carpetArea: builtUpArea * efficiency,
-    efficiency,
-    perimeter,
-    vastuScore: computeVastu(rooms, fpBBox),
+  if (!cand) throw new Error("No layout candidate");
+  const W = cand.W;
+  const D = Math.min(cand.D, build.h);
+  const k = D / cand.D;
+  const siteReq = cand.porch ? { ...req, parking: 0 as const } : req;
+
+  // 5. Where the house sits: room in front for cars, and one usable side yard.
+  let chosen: { floors: Room[][]; score: number; placement: Placement } | null = null;
+  for (const mirror of [false, true]) {
+    const local = houseRect(build, W, D, siteReq, mirror);
+    const placement: Placement = { frame, local, mirror, world: toWorldRect(frame, local) };
+    const floors = [cand.ground, ...cand.uppers].map((s) => bestFloor(s, W, cand!.D, k, placement, req));
+    const score = floors.reduce((a, f) => a + f.score, 0);
+    if (!chosen || score > chosen.score + 1e-9) chosen = { floors: floors.map((f) => f.rooms), score, placement };
+  }
+  const { placement } = chosen!;
+  const fp = placement.world;
+
+  const floors: FloorPlan[] = chosen!.floors.map((rooms, i) => {
+    const { doors, windows } = placeOpenings(rooms, fp, frame.road);
+    const walls = generateWalls(rooms, fp);
+    return {
+      floor: i,
+      name: FLOOR_NAMES[i] ?? `Floor ${i}`,
+      roadSide: frame.road,
+      footprint: fp,
+      rooms,
+      doors,
+      windows,
+      walls,
+      metrics: floorMetrics(rooms, fp, walls),
+    };
+  });
+
+  const site = planSite(frame, placement.local, siteReq, sb);
+  const result: PlanResult = {
+    plotArea: frame.area,
+    footprint: fp,
+    site: {
+      plot: frame.world,
+      buildable: toWorldRect(frame, build),
+      roadSide: frame.road,
+      elements: site.elements.map((e) => ({ ...e, ...toWorldRect(frame, e) })),
+    },
+    setback: sb,
+    floors,
+    suggestions: [],
   };
+  const warnings = [...site.warnings];
+  if (cand.porch) {
+    result.suggestions.push({ kind: "space", severity: "info", message: "Cars park in a covered porch at the front of the house, under the floor above." });
+  }
+  if (fit < 1) {
+    result.suggestions.push({ kind: "space", severity: "info", message: `Rooms were sized compactly (about ${Math.round(fit * 100)}% of the usual size for this finish level) to fit the plot.` });
+  }
+  if (cand.D > build.h + 0.05) {
+    warnings.push(`The brief needs ${cand.D.toFixed(1)} m of depth but only ${build.h.toFixed(1)} m is buildable, so rooms were compressed.`);
+  }
+  result.suggestions = [...buildSuggestions(result, req, warnings), ...result.suggestions];
+  result.validation = validatePlanRequirements(result, req);
+  return result;
 }

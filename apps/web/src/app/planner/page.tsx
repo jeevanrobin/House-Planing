@@ -15,7 +15,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { generatePlan } from "@/lib/floorplan/engine";
+import { generatePlan, planVastuScore } from "@/lib/floorplan/engine";
 import { exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
 
@@ -32,6 +32,7 @@ export default function PlannerPage() {
   const [plan, setPlan] = React.useState<PlanResult | null>(null);
   const [active, setActive] = React.useState(0);
   const [editable, setEditable] = React.useState(false);
+  const [view, setView] = React.useState<"plan" | "site">("plan");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
   const canvasWrap = React.useRef<HTMLDivElement>(null);
@@ -208,6 +209,14 @@ export default function PlannerPage() {
                   ))}
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <div className="flex rounded-xl border p-0.5">
+                    {(["plan", "site"] as const).map((v) => (
+                      <button key={v} onClick={() => setView(v)}
+                        className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${view === v ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+                        {v === "plan" ? "Floor plan" : "Site plan"}
+                      </button>
+                    ))}
+                  </div>
                   <Button size="sm" variant={editable ? "default" : "outline"} onClick={() => setEditable((e) => !e)}>
                     <Pencil /> {editable ? "Editing" : "Edit"}
                   </Button>
@@ -227,18 +236,20 @@ export default function PlannerPage() {
                 <FloorPlanCanvas
                   key={`${active}-${editable}`}
                   floor={plan.floors[active]}
-                  facing={req.facing}
+                  site={plan.site}
+                  view={view}
                   editable={editable}
                 />
               </div>
 
               {/* Legend */}
-              <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                {[["Public", "#6366f1"], ["Service", "#14b8a6"], ["Private", "#f59e0b"], ["Circulation", "#64748b"], ["Outdoor", "#22c55e"]].map(([l, c]) => (
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
+                {[["Indoor", "#FFFFFF"], ["Wet areas", "#E9EEF1"], ["Sit-out / balcony", "#F1E9DA"], ["Paving / terrace", "#EFEBE1"], ["Garden", "#DDE8CF"], ["Pool", "#CFE6F2"]].map(([l, c]) => (
                   <span key={l} className="flex items-center gap-1.5">
-                    <span className="size-3 rounded" style={{ background: c as string, opacity: 0.5 }} /> {l}
+                    <span className="size-3 rounded border" style={{ background: c }} /> {l}
                   </span>
                 ))}
+                <span className="flex items-center gap-1.5"><span className="h-0 w-4 border-t-2 border-dashed border-stone-400" /> Setback line</span>
               </div>
             </div>
 
@@ -246,10 +257,10 @@ export default function PlannerPage() {
             <aside className="space-y-4">
               <Card glass>
                 <CardContent className="grid grid-cols-2 gap-4 pt-6">
-                  <Metric label="Plot area" value={`${plan.plotArea.toFixed(0)} m²`} />
-                  <Metric label="Built-up" value={`${plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0).toFixed(0)} m²`} />
-                  <Metric label="Carpet area" value={`${plan.floors.reduce((a, f) => a + f.metrics.carpetArea, 0).toFixed(0)} m²`} />
-                  <Metric label="Efficiency" value={`${Math.round(plan.floors[active].metrics.efficiency * 100)}%`} />
+                  <Metric label="Plot area" value={`${Math.round(plan.plotArea * 10.764).toLocaleString("en-IN")} ft²`} sub={`${plan.plotArea.toFixed(0)} m²`} />
+                  <Metric label="House footprint" value={`${(plan.footprint.w * 3.281).toFixed(0)}′ × ${(plan.footprint.h * 3.281).toFixed(0)}′`} sub={`${plan.footprint.w.toFixed(1)} × ${plan.footprint.h.toFixed(1)} m`} />
+                  <Metric label="Built-up (all floors)" value={`${Math.round(plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0) * 10.764).toLocaleString("en-IN")} ft²`} sub={`${plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0).toFixed(0)} m²`} />
+                  <Metric label="Carpet (all floors)" value={`${Math.round(plan.floors.reduce((a, f) => a + f.metrics.carpetArea, 0) * 10.764).toLocaleString("en-IN")} ft²`} sub={`${Math.round(plan.floors[active].metrics.efficiency * 100)}% efficiency`} />
                 </CardContent>
               </Card>
 
@@ -258,14 +269,17 @@ export default function PlannerPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium">Vastu score</span>
                     <span className="font-display text-2xl font-bold text-primary">
-                      {plan.floors[active].metrics.vastuScore}
+                      {planVastuScore(plan)}
                     </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-muted">
                     <motion.div className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
-                      initial={{ width: 0 }} animate={{ width: `${plan.floors[active].metrics.vastuScore}%` }}
+                      initial={{ width: 0 }} animate={{ width: `${planVastuScore(plan)}%` }}
                       transition={{ duration: 0.8, ease: "easeOut" }} />
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {plan.floors[active].name}: {plan.floors[active].metrics.vastuScore}/100
+                  </p>
                 </CardContent>
               </Card>
 
@@ -297,11 +311,12 @@ export default function PlannerPage() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="font-display text-xl font-semibold tabular-nums">{value}</div>
+      <div className="font-display text-lg font-semibold tabular-nums">{value}</div>
+      {sub && <div className="text-xs text-muted-foreground tabular-nums">{sub}</div>}
     </div>
   );
 }

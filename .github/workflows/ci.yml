@@ -42,18 +42,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pytest
-      - name: Geometry tests
+      - name: Tests
         run: python -m pytest tests -q
-      - name: Engine smoke test
-        run: |
-          python - <<'PY'
-          from app.services.floorplan import generate_plan
-          plan = generate_plan(dict(plotWidth=12, plotDepth=18, facing='N', floors=2,
-              bedrooms=3, bathrooms=3, parking=1, balconies=2, vastu=True, garden=False,
-              pool=False, homeOffice=True, budget='premium', style='modern', luxury=4))
-          assert plan['floors'] and plan['plotArea'] == 216, plan
-          print('engine OK', plan['summary'])
-          PY
       - name: Import app
         run: python -c "import app.main; print('app import OK')"
 

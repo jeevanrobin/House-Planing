@@ -60,49 +60,58 @@ def as_user():
 
 
 # ---------- AI routes ----------
-def test_ai_generate_requires_auth(client):
-    assert client.post("/api/v1/ai/generate", json={"requirements": REQ}).status_code == 401
+PLAN = {
+    "floors": [{"name": "Ground Floor", "metrics": {"vastuScore": 62},
+                "rooms": [{"label": "Living Room", "type": "living", "w": 4.5, "h": 4.2}]}],
+    "suggestions": [{"kind": "vastu", "severity": "info", "message": "Vastu compliance 62/100."}],
+}
+BODY = {"requirements": REQ, "plan": PLAN}
+
+
+def test_ai_generate_is_gone(client):
+    # The engine runs in the browser now; the server no longer generates plans.
+    as_user()
+    assert client.post("/api/v1/ai/generate", json={"requirements": REQ}).status_code == 404
 
 
 def test_ai_suggestions_requires_auth(client):
-    assert client.post("/api/v1/ai/suggestions", json={"requirements": REQ}).status_code == 401
+    assert client.post("/api/v1/ai/suggestions", json=BODY).status_code == 401
 
 
-def test_ai_generate_ok_when_authenticated(client):
+def test_ai_suggestions_echoes_engine_tips(client):
     as_user()
-    r = client.post("/api/v1/ai/generate", json={"requirements": REQ})
+    r = client.post("/api/v1/ai/suggestions", json=BODY)
     assert r.status_code == 200
-    assert r.json()["floors"]
+    assert r.json()["suggestions"] == PLAN["suggestions"]
+    assert r.json()["ai"] is False  # Vertex isn't configured in tests
 
 
-def test_ai_suggestions_returns_engine_tips(client):
+def test_ai_suggestions_bounds_plan_size(client):
     as_user()
-    r = client.post("/api/v1/ai/suggestions", json={"requirements": REQ})
-    assert r.status_code == 200
-    kinds = [t["kind"] for t in r.json()["suggestions"]]
-    assert {"ventilation", "vastu", "space", "cost"} <= set(kinds)
+    rooms = PLAN["floors"][0]["rooms"] * 81
+    big = {**PLAN, "floors": [{**PLAN["floors"][0], "rooms": rooms}]}
+    assert client.post("/api/v1/ai/suggestions", json={**BODY, "plan": big}).status_code == 422
 
 
 def test_plot_polygon_size_is_bounded(client):
     as_user()
     huge = [[i % 10, i // 10] for i in range(101)]
-    r = client.post("/api/v1/ai/generate", json={"requirements": {**REQ, "plotPolygon": huge}})
+    r = client.post("/api/v1/ai/suggestions", json={**BODY, "requirements": {**REQ, "plotPolygon": huge}})
     assert r.status_code == 422
 
 
 def test_plot_polygon_vertices_must_be_pairs(client):
     as_user()
     bad = [[0, 0, 0], [10, 0], [10, 10]]
-    r = client.post("/api/v1/ai/generate", json={"requirements": {**REQ, "plotPolygon": bad}})
+    r = client.post("/api/v1/ai/suggestions", json={**BODY, "requirements": {**REQ, "plotPolygon": bad}})
     assert r.status_code == 422
 
 
-def test_ai_generate_is_rate_limited(client):
+def test_ai_suggestions_is_rate_limited(client):
     as_user()
-    codes = [client.post("/api/v1/ai/generate", json={"requirements": REQ}).status_code
-             for _ in range(31)]
-    assert codes[:30] == [200] * 30
-    assert codes[30] == 429
+    codes = [client.post("/api/v1/ai/suggestions", json=BODY).status_code for _ in range(11)]
+    assert codes[:10] == [200] * 10
+    assert codes[10] == 429
 
 
 # ---------- OTP ----------
