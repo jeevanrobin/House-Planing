@@ -43,7 +43,7 @@ Vastu-aware **2D house plans** — instantly, in the browser.
 | **Interactive editor** | ✅ | Drag, resize, retype rooms, undo/redo |
 | Exports | ✅ PNG/SVG · ⏳ PDF/DXF | Client-side raster/vector now; CAD later |
 | Dashboard | ✅ (mock data) | Projects, stats, subscription shell |
-| Backend API | 🟡 scaffold | `/ai/generate` is live & real; auth/projects need a DB |
+| Backend API | 🟡 scaffold | `/ai/generate` is live & real (requires login, rate-limited); auth/projects need a DB |
 | Auth (email/OTP/Google/JWT) | 🟡 scaffold | Flows + token issuance written; Google verify is a stub |
 | **Plot selection module** | ✅ | Google Maps draw/edit/delete + area/perimeter/length/width, facing, geocoding, validation. Offline fallback editor when no key |
 | Payments / Admin | ⏳ | Schema ready |
@@ -65,8 +65,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload                       # http://localhost:8000/docs
 ```
 
-The `/api/v1/ai/generate` endpoint works without a database — POST a `requirements`
-object and get a full plan back.
+`/api/v1/ai/generate` and `/ai/suggestions` require a bearer token (they are rate-limited
+and `/suggestions` can call Claude), so sign up / log in first, then POST a `requirements`
+object to get a full plan back.
+
+The API treats any `ENV` other than `development` as production: it refuses to start
+unless `JWT_SECRET` is a random value of at least 32 characters, and never echoes OTP codes.
 
 ### Everything via Docker
 ```bash

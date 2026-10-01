@@ -7,6 +7,8 @@ pydantic==2.10.4
 pydantic-settings==2.7.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 breaks on bcrypt>=4.1 (removed __about__, strict 72-byte limit).
+bcrypt==4.0.1
 redis==5.2.1
 slowapi==0.1.9
 httpx==0.28.1

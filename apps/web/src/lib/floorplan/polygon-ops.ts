@@ -207,7 +207,6 @@ export function subdividePolygon(
   if (weights.length <= 1) return [poly];
   if (poly.length < 3) return [poly];
 
-  const total = weights.reduce((a, b) => a + b, 0) || 1;
   const bbox = polygonBBox(poly);
   const axis = forceAxis ?? (bbox.h >= bbox.w ? "y" : "x");
 
@@ -252,7 +251,6 @@ export function splitPolygonByLine(
   axis: "x" | "y",
   pos: number,
 ): [Polygon, Polygon] {
-  const idx = axis === "x" ? 0 : 1;
   // Build a large clip rect on each side of the line.
   const bbox = polygonBBox(poly);
   const margin = Math.max(bbox.w, bbox.h) + 10;

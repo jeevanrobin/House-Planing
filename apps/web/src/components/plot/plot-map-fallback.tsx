@@ -53,7 +53,6 @@ export const PlotMapFallback = React.forwardRef<PlotMapHandle, Props>(
     React.useEffect(() => {
       setPts([]);
       setDrawing(false);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [reloadSignal]);
 
     React.useImperativeHandle(ref, () => ({

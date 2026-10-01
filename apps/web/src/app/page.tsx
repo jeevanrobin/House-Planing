@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  MapPin, Sparkles, Ruler, Compass, Wind, LayoutDashboard,
+  MapPin, Sparkles, Ruler, Compass, Wind,
   FileDown, ArrowRight, Check, Building2, Home, HardHat,
 } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
