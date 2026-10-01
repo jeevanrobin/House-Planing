@@ -65,6 +65,7 @@ CREATE TABLE refresh_tokens (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_refresh_user ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_hash ON refresh_tokens(token_hash);
 
 -- ---------- subscriptions & billing -----------------------------------
 CREATE TABLE subscriptions (

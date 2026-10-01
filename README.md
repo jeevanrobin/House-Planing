@@ -44,7 +44,7 @@ Vastu-aware **2D house plans** — instantly, in the browser.
 | Exports | ✅ PNG/SVG · ⏳ PDF/DXF | Client-side raster/vector now; CAD later |
 | Dashboard | ✅ (mock data) | Projects, stats, subscription shell |
 | Backend API | 🟡 scaffold | `/ai/generate` is live & real (requires login, rate-limited); auth/projects need a DB |
-| Auth (email/OTP/Google/JWT) | 🟡 scaffold | Flows + token issuance written; Google verify is a stub |
+| Auth (email/OTP/Google/JWT) | ✅ API · ⏳ UI | Password, email OTP (SMTP), Google ID-token sign-in, refresh-token rotation with reuse detection, logout. No login screens yet |
 | **Plot selection module** | ✅ | Google Maps draw/edit/delete + area/perimeter/length/width, facing, geocoding, validation. Offline fallback editor when no key |
 | Payments / Admin | ⏳ | Schema ready |
 
@@ -130,7 +130,7 @@ Geometry lives in `apps/web/src/lib/geo/plot-geometry.ts` (TS, unit-tested with 
 `apps/api/app/services/geo.py` (Python, unit-tested with pytest).
 
 ## Roadmap (next milestones)
-1. Wire auth end-to-end + Google ID-token verification + email/SMS OTP delivery.
+1. Login / sign-up screens in the web app (the auth API is done) + SMS OTP.
 2. Vastu-biased placement optimiser to lift compliance scores.
 3. PDF & DXF (CAD) export via a worker; S3/CDN delivery.
 4. Stripe/Razorpay subscriptions + admin analytics dashboard.
