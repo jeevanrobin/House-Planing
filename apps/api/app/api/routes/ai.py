@@ -1,7 +1,10 @@
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 
+from app.api.deps import current_user
+from app.core.rate_limit import limiter
+from app.models import User
 from app.schemas import GenerateIn
 from app.services.floorplan import generate_plan, to_flat
 from app.services.llm import critique_plan
@@ -10,7 +13,8 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 
 @router.post("/generate")
-async def generate(body: GenerateIn) -> dict:
+@limiter.limit("30/minute")
+async def generate(request: Request, body: GenerateIn, user: User = Depends(current_user)) -> dict:
     """Generate a 2D floor-plan from requirements using the geometric engine.
 
     Stateless and key-free — returns the full PlanResult (rooms, doors,
@@ -26,7 +30,8 @@ async def generate(body: GenerateIn) -> dict:
 
 
 @router.post("/suggestions")
-async def suggestions(body: GenerateIn) -> dict:
+@limiter.limit("10/minute")
+async def suggestions(request: Request, body: GenerateIn, user: User = Depends(current_user)) -> dict:
     """Optimisation hints for a generated plan.
 
     Always returns the deterministic baseline tips. When Claude (via Vertex) is

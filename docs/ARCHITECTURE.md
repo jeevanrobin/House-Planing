@@ -46,7 +46,7 @@ rendering (PDF/DXF) and any future LLM-assisted refinement are offloaded to work
 | --- | --- |
 | AuthN | JWT access (30 min) + rotating refresh tokens hashed at rest |
 | Passwords | bcrypt via passlib; OAuth accounts have no password |
-| OTP | 6-digit, hashed, TTL + attempt counter; never returned in prod |
+| OTP | 6-digit, hashed, TTL; locked after 5 wrong guesses; constant-time compare; never returned in prod |
 | Rate limiting | `slowapi` (Redis-backed in prod) per-IP defaults |
 | Headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, CSP at the edge |
 | CSRF | Token-in-header pattern for cookie flows; bearer tokens are CSRF-immune |

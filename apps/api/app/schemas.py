@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -21,7 +21,7 @@ class OtpRequestIn(BaseModel):
 
 class OtpVerifyIn(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(pattern=r"^\d{6}$")
     purpose: Literal["login", "verify_email", "reset"] = "login"
 
 
@@ -45,6 +45,8 @@ class UserOut(BaseModel):
 
 # ---------- planning ----------
 Facing = Literal["N", "E", "S", "W", "NE", "NW", "SE", "SW"]
+# An [x, y] vertex in metres; bounded so a payload can't stall the solver.
+Vertex = Annotated[list[Annotated[float, Field(ge=-1000, le=1000)]], Field(min_length=2, max_length=2)]
 
 
 class Requirements(BaseModel):
@@ -52,7 +54,7 @@ class Requirements(BaseModel):
     plotDepth: float = Field(gt=2, le=200)
     facing: Facing
     floors: int = Field(ge=1, le=4)
-    plotPolygon: list[list[float]] | None = None
+    plotPolygon: list[Vertex] | None = Field(default=None, min_length=3, max_length=100)
     bedrooms: int = Field(ge=1, le=10)
     bathrooms: int = Field(ge=1, le=10)
     parking: int = Field(ge=0, le=3)
