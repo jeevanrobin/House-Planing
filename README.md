@@ -1,63 +1,65 @@
 # AI Plot Planner
 
-Premium SaaS that turns a **map-selected plot + your requirements** into intelligent,
-Vastu-aware **2D house plans** — instantly, in the browser.
+Draw your plot on the map, describe the home you want, and get a realistic,
+Vastu-aware house plan that follows the shape of your land — drawn like an
+architect's sheet, saved to your account.
 
-> **Status: foundation milestone.** The frontend, design system, AI planning engine,
-> 2D plan generator and interactive editor are **built and working today**. Auth,
-> Google Maps, payments and async workers are **scaffolded** with a complete schema,
-> typed contracts and infra, ready to be wired in subsequent milestones.
+## What's in the box
 
----
+| Area | What it does |
+| --- | --- |
+| **Plot module** | Google Maps (hybrid / satellite / terrain), draw / edit the boundary, live area, perimeter, length / width, auto facing, reverse-geocoded address. Offline boundary editor when no Maps key is set. |
+| **Planning engine** | Runs in the browser, no server or key needed. Sizes the house to the brief, follows irregular plot outlines, stacks stairs, places parking / pool / garden, scores Vastu against true north. |
+| **Drawing** | Architectural sheet: real wall thicknesses, doors and swings, windows, furniture and fixtures, stair treads, dimension chains, title block. Floor-plan and site-plan views; blueprint dark mode; SVG / PNG export. |
+| **Accounts & data** | Supabase Auth (email + password, magic link, Google) and Supabase Postgres with row-level security: projects, plots and saved plans. |
+| **API** (`apps/api`) | FastAPI: optional Claude design critique of a plan (`/ai/suggestions`), authenticated with Supabase tokens, rate-limited. |
 
 ## Monorepo layout
 
 ```
 .
 ├── apps/
-│   ├── web/                 # Next.js 15 · React 19 · TS · Tailwind · Framer Motion
+│   ├── web/                    # Next.js 15 · React 19 · TypeScript · Tailwind
 │   │   └── src/
-│   │       ├── app/         # landing · /planner · /dashboard
-│   │       ├── components/  # UI primitives, planner wizard, floor-plan canvas
-│   │       └── lib/floorplan/   # ⭐ the AI planning engine (TypeScript)
-│   └── api/                 # FastAPI · SQLAlchemy 2 · Pydantic v2
-│       ├── app/
-│       │   ├── services/llm.py         # optional Claude critique of a plan
-│       │   ├── api/routes/  # auth · projects · ai
-│       │   └── models.py    # ORM models
-│       └── db/schema.sql    # complete PostgreSQL schema
-├── docker-compose.yml       # web · api · postgres · redis
-├── .github/workflows/ci.yml # typecheck · lint · build · engine tests · docker
-└── docs/ARCHITECTURE.md     # design system, scaling, AWS deployment
+│   │       ├── app/            # landing · /planner · /login · /dashboard
+│   │       ├── components/     # planner, plot, UI primitives
+│   │       └── lib/
+│   │           ├── floorplan/  # ⭐ the planning engine + furniture
+│   │           ├── data/       # Supabase data access (projects, plots, plans)
+│   │           └── supabase/   # browser / server clients, session middleware
+│   └── api/                    # FastAPI · Pydantic v2
+├── supabase/migrations/        # database schema + row-level security
+├── docker-compose.yml          # web · api · redis
+└── .github/workflows/ci.yml    # typecheck · lint · tests · build · docker
 ```
 
-## What actually works right now
+## Set up
 
-| Module | State | Notes |
-| --- | --- | --- |
-| Landing page | ✅ | Hero, features, pricing, testimonials, FAQ, CTA — dark/light, glass |
-| Design system | ✅ | Tailwind tokens, glassmorphism, Shadcn-style primitives, theming |
-| Requirement wizard | ✅ | 4 steps, animated, fully typed |
-| **AI planning engine** | ✅ | Realistic house sizing, band layout with a circulation spine, stacked stairs, site planning (parking / pool / garden), access-based doors — offline, **no API key** |
-| **2D plan generator** | ✅ | Architectural drawing: real wall thicknesses, door swings, windows, stair treads, tiled wet areas, railings, ft-in dimensions, floor-plan and site-plan views |
-| **Interactive editor** | ✅ | Drag, resize, retype rooms, undo/redo |
-| Exports | ✅ PNG/SVG · ⏳ PDF/DXF | Client-side raster/vector now; CAD later |
-| Dashboard | ✅ (mock data) | Projects, stats, subscription shell |
-| Backend API | 🟡 scaffold | Auth + `/ai/suggestions` (Claude critique of a browser-generated plan); projects need a DB |
-| Auth (email/OTP/Google/JWT) | ✅ API · ⏳ UI | Password, email OTP (SMTP), Google ID-token sign-in, refresh-token rotation with reuse detection, logout. No login screens yet |
-| **Plot selection module** | ✅ | Google Maps draw/edit/delete + area/perimeter/length/width, facing, geocoding, validation. Offline fallback editor when no key |
-| Payments / Admin | ⏳ | Schema ready |
+### 1. Supabase (accounts and data)
 
-## Quick start
+1. In your Supabase project, open **SQL Editor → New query**, paste
+   [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) and **Run**.
+2. **Authentication → URL Configuration**: set *Site URL* to your app's URL
+   (`http://localhost:3100` for local work) and add `http://localhost:3100/auth/callback`
+   (plus your production `/auth/callback`) to *Redirect URLs*.
+3. Optional — **Authentication → Providers → Google**: enable it with a Google OAuth
+   client (Google Cloud Console → Credentials → OAuth client ID, type *Web*, authorised
+   redirect URI `https://<your-project>.supabase.co/auth/v1/callback`).
+4. Copy the project URL and **publishable** key into `apps/web/.env.local` (see
+   [`.env.example`](.env.example)). Never put the secret key in the web app.
 
-### Frontend (works standalone, no keys)
+### 2. Web app
+
 ```bash
 cd apps/web
-npm install          # or: pnpm install from the repo root
-npm run dev          # http://localhost:3100  → try /planner
+npm install
+npm run dev          # http://localhost:3100
 ```
 
-### Backend
+The planner works without Supabase or a Maps key; signing in and saving need Supabase.
+
+### 3. API (optional — AI critique)
+
 ```bash
 cd apps/api
 python -m venv .venv && . .venv/Scripts/activate   # Windows
@@ -65,72 +67,45 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload                       # http://localhost:8000/docs
 ```
 
-`/api/v1/ai/suggestions` requires a bearer token (it is rate-limited and can call Claude):
-sign up / log in first, then POST `{ requirements, plan }` with a plan generated in the web app.
+Set `SUPABASE_URL` so the API can verify sign-ins. Any `ENV` other than `development`
+is treated as production and refuses to start without it.
 
-The API treats any `ENV` other than `development` as production: it refuses to start
-unless `JWT_SECRET` is a random value of at least 32 characters, and never echoes OTP codes.
+### Docker
 
-### Everything via Docker
 ```bash
-cp .env.example .env
-docker compose up --build      # web :3100 · api :8000 · postgres :5432 · redis :6379
+cp .env.example .env           # fill in the Supabase values
+docker compose up --build      # web :3100 · api :8000 · redis :6379
 ```
-Postgres auto-applies `apps/api/db/schema.sql` on first boot.
 
 ## The planning engine
 
-The differentiator, in `apps/web/src/lib/floorplan` (TypeScript, runs instantly in the
-browser — no server or API key). Given the plot, facing and brief it:
+In `apps/web/src/lib/floorplan`. Given the plot, facing and brief it:
 
-1. **Sizes the house to the brief, not the plot.** Each room has a realistic target area
-   and minimum width/depth (scaled by luxury level and budget). The engine tries house
-   widths in 25 cm steps, lays every floor out, and keeps the width whose rooms best hit
-   their targets while fitting the buildable area and the yards.
-2. **Lays rooms out in front-to-back bands** like a real Indian home: sit-out → living
-   (+ guest bedroom) → kitchen / dining / stair → hallway → bedrooms with attached bath and
-   dressing. Living, dining, stair and hallways form one connected circulation spine.
-3. **Stacks floors on one structural core** — the staircase sits in exactly the same
-   place on every floor; spare depth upstairs becomes an open terrace.
-4. **Places the house on the site** with setbacks; cars, pool and garden go in the open
-   yards (or a covered car porch on small plots). Tight plots get compact rooms, then
-   drop the sit-out, before anything is squashed.
-5. **Doors and windows from access rules** (bedrooms off the hallway, ensuites off their
-   bedroom, kitchen off dining, main door facing the road), then a connectivity pass
-   guarantees every room is reachable. Real wall thicknesses (230 / 115 mm).
-6. **Scores Vastu** per room octant, tries mirrored/reordered variants, keeps the best.
+1. **Sizes the house to the brief, not the plot** — realistic room areas and minimum
+   dimensions, scaled by finish level. House widths are tried in steps; every floor is
+   laid out and scored on room sizes, plot fit and site features.
+2. **Follows the plot's shape** — the drawing is turned to square up with the road
+   frontage (north arrow and Vastu use true north). Each band of rooms takes the width the
+   land allows at its depth, so the outline steps with the boundary. *Maximise the plot*
+   (default for map-drawn plots) grows the house towards ~60% coverage and adds courtyards;
+   *Balanced* keeps a compact house with garden around it.
+3. **Lays rooms out like a real home** — sit-out → living → kitchen / dining / stair →
+   hallway → bedrooms with attached bath and dressing, along one connected circulation
+   spine. Stairs stack on every floor.
+4. **Places the site** — setbacks, cars in the front yard or a covered porch, pool and
+   garden in the open land.
+5. **Doors and windows from access rules** — bedrooms off the hallway, ensuites off their
+   bedroom, never a toilet onto a kitchen or pooja room — then a connectivity pass makes
+   sure every room is reachable.
 
-`engine.test.ts` checks hard invariants over a seeded sweep of random briefs: rooms tile
-the house exactly with no overlaps, every room is reachable, stairs stack, and site
-features stay on the plot and clear of the house.
+`engine.test.ts` checks hard invariants over a seeded sweep of random briefs (rooms tile
+each floor's outline with no overlaps, every room is reachable, stairs stack, everything
+stays on the plot).
 
-The API (`/ai/suggestions`) accepts the plan the browser generated and adds an optional
-Claude design critique.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design system, security,
-scaling strategy and AWS deployment.
+## Roadmap
 
-## Plot selection module
-
-Open from any dashboard project → **Plot Details** (`/dashboard/projects/[id]/plot`):
-
-- **Google Maps** with hybrid / satellite / terrain / map views, Places search, Street View.
-- **Draw / edit / delete** the boundary: click to add corners, double-click to finish,
-  drag vertices, right-click a vertex to remove, drag the whole polygon.
-- **Live metrics** — area (ft² + m²), perimeter, length & width (PCA oriented bounding box),
-  auto facing (overridable), reverse-geocoded address/city/state/country, lat/lng.
-- **Validation** — blocks self-intersecting, empty or <3-point shapes (client *and* server).
-- **Save/load** — POSTs to `/api/v1/plots` (server recomputes & validates as source of
-  truth); falls back to `localStorage` without a backend, and hands plot dimensions to the
-  planner wizard.
-- **No Maps key?** A built-in offline SVG boundary editor keeps the whole flow working for
-  dev and testing. Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to enable the real map.
-
-Geometry lives in `apps/web/src/lib/geo/plot-geometry.ts` (TS, unit-tested with Vitest) and
-`apps/api/app/services/geo.py` (Python, unit-tested with pytest).
-
-## Roadmap (next milestones)
-1. Login / sign-up screens in the web app (the auth API is done) + SMS OTP.
-2. Vastu-biased placement optimiser to lift compliance scores.
-3. PDF & DXF (CAD) export via a worker; S3/CDN delivery.
-4. Stripe/Razorpay subscriptions + admin analytics dashboard.
+1. 3D view of the generated plan.
+2. Premium redesign of every page; Free / Pro plans.
+3. PDF and DXF (CAD) export; photoreal renders.

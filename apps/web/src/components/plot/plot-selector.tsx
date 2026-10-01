@@ -13,19 +13,17 @@ import {
   type LatLng, type PlotMetrics,
 } from "@/lib/geo/plot-geometry";
 import type { Facing, Polygon } from "@/lib/floorplan/types";
-import type { PlotPayload } from "@/lib/api/plots";
+import type { PlotInput } from "@/lib/data/projects";
 
 interface Props {
-  projectId?: string;
   initialPoints?: LatLng[];
-  onSave?: (payload: PlotPayload) => Promise<void>;
+  onSave?: (plot: PlotInput) => Promise<void>;
   /** Planner flow: hand the plot's dimensions forward to the wizard. */
   onContinue?: (dims: { plotWidth: number; plotDepth: number; facing: Facing; plotPolygon?: Polygon }) => void;
   continueLabel?: string;
 }
 
 export function PlotSelector({
-  projectId = "draft",
   initialPoints,
   onSave,
   onContinue,
@@ -88,13 +86,11 @@ export function PlotSelector({
     setSave({ state: "saving" });
     try {
       await onSave({
-        project_id: projectId,
         points,
-        area_sqft: Math.round(metrics.areaSqft * 100) / 100,
-        area_sqm: Math.round(metrics.areaSqm * 100) / 100,
-        perimeter_m: Math.round(metrics.perimeterM * 100) / 100,
-        length_m: Math.round(metrics.lengthM * 100) / 100,
-        width_m: Math.round(metrics.widthM * 100) / 100,
+        areaSqm: metrics.areaSqm,
+        perimeterM: metrics.perimeterM,
+        lengthM: metrics.lengthM,
+        widthM: metrics.widthM,
         facing,
         latitude: metrics.centroid.lat,
         longitude: metrics.centroid.lng,

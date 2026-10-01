@@ -1,10 +1,9 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  Download, FileImage, FileCode2, Pencil, RotateCcw,
+  FileImage, FileCode2, Pencil, RotateCcw,
   Sparkles, CheckCircle2, AlertTriangle, Info,
   MapPin, PencilRuler, ArrowLeft,
 } from "lucide-react";
@@ -16,6 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { generatePlan, planVastuScore } from "@/lib/floorplan/engine";
+import { SavePlan, PENDING_KEY } from "@/components/planner/save-plan";
+import { getPlan } from "@/lib/data/projects";
+import { readHandoff } from "@/lib/data/handoff";
 import { exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
 
@@ -35,18 +37,44 @@ export default function PlannerPage() {
   const [view, setView] = React.useState<"plan" | "site">("plan");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
+  const [projectId, setProjectId] = React.useState<string | undefined>();
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const canvasWrap = React.useRef<HTMLDivElement>(null);
 
-  // Coming from the dashboard Plot module: skip straight to requirements.
   React.useEffect(() => {
+    // Opening a saved plan (/planner?plan=<id>).
+    const planId = new URLSearchParams(window.location.search).get("plan");
+    if (planId) {
+      getPlan(planId).then((saved) => {
+        if (!saved) { setLoadError("That plan doesn't exist or isn't yours."); return; }
+        setProjectId(saved.projectId);
+        setReq(saved.requirements);
+        setPlan(saved.plan);
+        setView(saved.requirements.plotPolygon ? "site" : "plan");
+        setStage("result");
+      }).catch((e: Error) => setLoadError(e.message));
+      return;
+    }
+    // Back from signing in to save: rebuild the plan from the remembered brief.
     try {
-      const raw = window.sessionStorage.getItem("plotHandoff");
-      if (raw) {
-        setReqInit(JSON.parse(raw) as Partial<Requirements>);
-        setStage("requirements");
+      const pending = window.sessionStorage.getItem(PENDING_KEY);
+      if (pending) {
+        window.sessionStorage.removeItem(PENDING_KEY);
+        const handoff = readHandoff();
+        if (handoff?.projectId) setProjectId(handoff.projectId);
+        onComplete(JSON.parse(pending) as Requirements);
+        return;
       }
     } catch {
       /* ignore */
+    }
+    // Coming from a project's plot: skip straight to requirements.
+    const handoff = readHandoff();
+    if (handoff) {
+      const { projectId: pid, ...init } = handoff;
+      setProjectId(pid);
+      setReqInit(init);
+      setStage("requirements");
     }
   }, []);
 
@@ -75,6 +103,9 @@ export default function PlannerPage() {
     <div className="min-h-dvh bg-grid">
       <SiteHeader />
       <main className="container py-8">
+        {loadError && (
+          <p role="alert" className="mb-6 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{loadError}</p>
+        )}
         {stage === "choose" ? (
           <div className="mx-auto max-w-3xl">
             <div className="mb-8 text-center">
@@ -299,9 +330,7 @@ export default function PlannerPage() {
                 </CardContent>
               </Card>
 
-              <Button asChild variant="outline" className="w-full">
-                <Link href="/dashboard"><Download /> Save to dashboard</Link>
-              </Button>
+              <SavePlan req={req} plan={plan} vastu={planVastuScore(plan)} projectId={projectId} />
             </aside>
           </div>
         )}
