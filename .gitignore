@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Production
+build/
+dist/
+
+# Env
+.env
+.env*.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Misc
+.DS_Store
+*.log
+coverage/
+.turbo/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json

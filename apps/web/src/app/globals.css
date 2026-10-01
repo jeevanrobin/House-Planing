@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 99%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Premium indigo / violet primary */
+    --primary: 245 75% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 175 70% 41%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 245 75% 60%;
+
+    --radius: 0.875rem;
+  }
+
+  .dark {
+    --background: 224 47% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 224 40% 9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 224 40% 9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 250 85% 70%;
+    --primary-foreground: 224 47% 6%;
+
+    --secondary: 223 30% 16%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 223 30% 14%;
+    --muted-foreground: 217 18% 65%;
+
+    --accent: 172 75% 50%;
+    --accent-foreground: 224 47% 6%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 223 25% 18%;
+    --input: 223 25% 18%;
+    --ring: 250 85% 70%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01", "cv01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Glassmorphism */
+  .glass {
+    @apply border border-white/15 bg-white/60 backdrop-blur-xl backdrop-saturate-150
+      shadow-glass dark:border-white/10 dark:bg-white/[0.04];
+  }
+
+  .glass-strong {
+    @apply border border-white/20 bg-white/80 backdrop-blur-2xl backdrop-saturate-200
+      shadow-glass-lg dark:border-white/10 dark:bg-white/[0.06];
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-br from-foreground via-foreground to-foreground/60 bg-clip-text text-transparent;
+  }
+
+  .text-brand-gradient {
+    @apply bg-gradient-to-r from-primary via-primary to-accent bg-clip-text text-transparent;
+  }
+}
+
+@layer utilities {
+  .bg-grid {
+    @apply bg-grid-light dark:bg-grid-dark;
+    background-size: 48px 48px;
+  }
+
+  /* Radial spotlight for hero sections */
+  .spotlight {
+    background:
+      radial-gradient(60% 50% at 50% 0%, hsl(var(--primary) / 0.18), transparent 70%),
+      radial-gradient(40% 40% at 80% 20%, hsl(var(--accent) / 0.12), transparent 70%);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+  background-clip: content-box;
+}

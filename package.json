@@ -1,0 +1,18 @@
+{
+  "name": "ai-plot-planner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Plot Planner — premium SaaS for AI-generated 2D house plans from map-selected plots.",
+  "packageManager": "pnpm@10.9.3",
+  "scripts": {
+    "dev": "pnpm --filter @app/web dev",
+    "build": "pnpm --filter @app/web build",
+    "lint": "pnpm --filter @app/web lint",
+    "api:dev": "uvicorn app.main:app --reload --app-dir apps/api",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down -v"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

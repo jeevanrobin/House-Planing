@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    name: Web (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm run test
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  api:
+    name: API (FastAPI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: Geometry tests
+        run: python -m pytest tests -q
+      - name: Engine smoke test
+        run: |
+          python - <<'PY'
+          from app.services.floorplan import generate_plan
+          plan = generate_plan(dict(plotWidth=12, plotDepth=18, facing='N', floors=2,
+              bedrooms=3, bathrooms=3, parking=1, balconies=2, vastu=True, garden=False,
+              pool=False, homeOffice=True, budget='premium', style='modern', luxury=4))
+          assert plan['floors'] and plan['plotArea'] == 216, plan
+          print('engine OK', plan['summary'])
+          PY
+      - name: Import app
+        run: python -c "import app.main; print('app import OK')"
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t plot-api ./apps/api
+      - name: Build Web image
+        run: docker build -t plot-web ./apps/web
