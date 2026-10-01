@@ -29,21 +29,15 @@ const mono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://aiplotplanner.com"),
   title: {
-    default: "AI Plot Planner — Design your home from a map",
+    default: "AI Plot Planner — house plans that fit your plot",
     template: "%s · AI Plot Planner",
   },
   description:
-    "Select your plot on the map, and let AI generate intelligent, Vastu-aware 2D house plans in seconds. Built for homeowners, architects and builders.",
-  keywords: [
-    "house plan generator",
-    "AI floor plan",
-    "plot area calculator",
-    "2D house design",
-    "Vastu home design",
-  ],
+    "Draw your plot on the map, describe your home, and get a furnished, dimensioned, Vastu-scored house plan that follows your land's real shape — with a site plan, a 3D model and a PDF drawing set.",
+  keywords: ["house plan generator", "floor plan from plot", "Vastu house plan", "3D house model", "irregular plot house design"],
   openGraph: {
     title: "AI Plot Planner",
-    description: "AI-generated 2D house plans from a map-selected plot.",
+    description: "House plans that fit your plot — drawn like an architect's sheet, in under a second.",
     type: "website",
   },
 };

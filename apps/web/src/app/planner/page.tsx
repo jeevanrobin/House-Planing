@@ -3,7 +3,7 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import {
-  FileImage, FileCode2, Pencil, RotateCcw,
+  FileDown, FileImage, FileCode2, Pencil, RotateCcw,
   Sparkles, CheckCircle2, AlertTriangle, Info,
   MapPin, PencilRuler, ArrowLeft,
 } from "lucide-react";
@@ -24,7 +24,7 @@ import { generatePlan, planVastuScore } from "@/lib/floorplan/engine";
 import { SavePlan, PENDING_KEY } from "@/components/planner/save-plan";
 import { getPlan } from "@/lib/data/projects";
 import { readHandoff } from "@/lib/data/handoff";
-import { exportPNG, exportSVG } from "@/lib/export";
+import { exportPDF, exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
 
 type Stage = "choose" | "plot" | "requirements" | "result";
@@ -46,6 +46,22 @@ export default function PlannerPage() {
   const [projectId, setProjectId] = React.useState<string | undefined>();
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const canvasWrap = React.useRef<HTMLDivElement>(null);
+  const printWrap = React.useRef<HTMLDivElement>(null);
+  const [printing, setPrinting] = React.useState(false);
+
+  // PDF drawing set: once the offscreen sheets have rendered, collect and export them.
+  React.useEffect(() => {
+    if (!printing) return;
+    const id = window.setTimeout(async () => {
+      const svgs = [...(printWrap.current?.querySelectorAll("svg[viewBox]") ?? [])] as SVGSVGElement[];
+      try {
+        if (svgs.length) await exportPDF(svgs, `${req?.bedrooms ?? ""}bhk-drawing-set`);
+      } finally {
+        setPrinting(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [printing, req]);
 
   React.useEffect(() => {
     // Opening a saved plan (/planner?plan=<id>).
@@ -260,6 +276,9 @@ export default function PlannerPage() {
                       <Button size="sm" variant="ghost" onClick={() => { const s = getSVG(); if (s) exportPNG(s, `floor-${active}`); }}>
                         <FileImage /> PNG
                       </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setPrinting(true)} disabled={printing}>
+                        <FileDown /> {printing ? "Preparing…" : "PDF set"}
+                      </Button>
                     </>
                   )}
                   <Button size="sm" variant="ghost" onClick={restart}>
@@ -286,6 +305,20 @@ export default function PlannerPage() {
               )}
 
               {view !== "3d" && <PlanLegend />}
+
+              {/* Offscreen sheets for the PDF drawing set (light palette for printing). */}
+              {printing && (
+                <div ref={printWrap} aria-hidden className="pointer-events-none fixed -left-[10000px] top-0 w-[1400px]">
+                  {[{ f: plan.floors[0], v: "site" as const }, ...plan.floors.map((f) => ({ f, v: "plan" as const }))].map(({ f, v }, i) => (
+                    <FloorPlanCanvas key={i} floor={f} site={plan.site} view={v} palette="light"
+                      meta={{
+                        project: `${req.bedrooms} BHK Residence`,
+                        subtitle: `${Math.round(plan.plotArea * 10.764).toLocaleString("en-IN")} sq ft plot · ${req.facing}-facing${v === "site" ? " · Site plan" : ""}`,
+                        date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                      }} />
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Sidebar */}

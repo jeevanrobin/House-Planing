@@ -113,6 +113,8 @@ interface Props {
   floor: FloorPlan;
   site: SitePlan;
   meta?: SheetMeta;
+  /** Force a palette (e.g. "light" for printing); defaults to the current theme. */
+  palette?: "light" | "blueprint";
   /** "plan" frames the house; "site" shows the whole plot. */
   view?: "plan" | "site";
   editable?: boolean;
@@ -130,9 +132,9 @@ function ftIn(m: number): string {
   return `${Math.floor(totalIn / 12)}′${totalIn % 12}″`;
 }
 
-export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className }: Props) {
+export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className, palette }: Props) {
   const { resolvedTheme } = useTheme();
-  const C = resolvedTheme === "dark" ? BLUEPRINT : LIGHT;
+  const C = (palette ?? (resolvedTheme === "dark" ? "blueprint" : "light")) === "blueprint" ? BLUEPRINT : LIGHT;
   const fp = floor.footprint;
   const isGround = floor.floor === 0;
   const bb = polygonBBox(site.plot);
