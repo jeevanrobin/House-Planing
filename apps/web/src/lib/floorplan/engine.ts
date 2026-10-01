@@ -59,6 +59,12 @@ function withFiller(band: Band, W: number, label: string, key: string): Band {
   return { ...band, units: [...band.units, filler] };
 }
 
+/** Insert `u` right after the living room (end-pinned units keep array order). */
+function withAfterLiving(units: Unit[], u: Unit): Unit[] {
+  const i = units.findIndex((x) => x.cols[0].rooms[0].type === "living");
+  return i < 0 ? [...units, u] : [...units.slice(0, i + 1), u, ...units.slice(i + 1)];
+}
+
 /** Open-plan living + dining on wide houses so the living room isn't stretched. */
 function adjustGround(prog: FloorProgram, W: number): FloorProgram {
   const pub = prog.bands.find((b) => b.kind === "public")!;
@@ -68,7 +74,7 @@ function adjustGround(prog: FloorProgram, W: number): FloorProgram {
   if (!dining || pubArea / W >= pub.minD * 0.8) return prog;
   if (pub.units.reduce((a, u) => a + unitMinW(u), 0) + unitMinW(dining) > W) return prog;
   const bands = prog.bands.map((b) =>
-    b === pub ? { ...b, units: [...b.units, { ...dining, pin: "end" as const }] }
+    b === pub ? { ...b, units: withAfterLiving(b.units, { ...dining, pin: "end" as const }) }
       : b === svc ? { ...b, units: b.units.filter((u) => u !== dining) } : b);
   return { ...prog, bands };
 }

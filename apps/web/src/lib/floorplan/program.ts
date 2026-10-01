@@ -222,17 +222,21 @@ export function groundProgram(req: Requirements, porch = false, fit = 1): FloorP
 
   // Circulation spine on the "end" side: living above dining, dining beside the
   // stair, passages beside the stair. Bedrooms and services take the other side.
-  const pub: Unit[] = [single(room("living", "Living Room", s), "end")];
+  // End-pinned units keep array order: [pooja] [living] [powder] hug each other,
+  // so both small rooms open off the living room; front bedrooms go beyond them.
+  const pub: Unit[] = [];
   // A compact pooja with a small store behind it, rather than a deep sliver.
-  if (req.vastu) pub.push({ cols: [{ rooms: [room("pooja", "Pooja", s), room("store", "Store", s, "store", { optional: true })], absorb: 1 }] });
+  if (req.vastu) pub.push({ cols: [{ rooms: [room("pooja", "Pooja", s), room("store", "Store", s, "store", { optional: true })], absorb: 1 }], pin: "end" });
+  pub.push(single(room("living", "Living Room", s), "end"));
   if (req.homeOffice && req.floors === 1) pub.push(single(room("office", "Home Office", s)));
   bands.push({ kind: "public", units: pub, minD: 3.3, maxD: 5.4 });
 
   const kitchenCol: Column = { rooms: [room("kitchen", "Kitchen", s), room("utility", "Utility", s, "utility", { optional: true })] };
   const svc: Unit[] = [{ cols: [kitchenCol], pin: "end" }, single(room("dining", "Dining", s), "end")];
-  // Guest powder room only when the bedrooms (and their baths) are upstairs.
+  // Guest powder room near the entrance (off the living room, never the
+  // kitchen) — only when the bedrooms and their baths are upstairs.
   if (req.floors > 1) {
-    svc.push({ cols: [{ rooms: [room("toilet", "Powder Room", s), room("store", "Store", s, "store", { optional: true })] }] });
+    pub.push({ cols: [{ rooms: [room("toilet", "Powder Room", s), room("store", "Store", s, "store", { optional: true })] }], pin: "end" });
   }
   let stairBand = -1;
   if (req.floors > 1) {

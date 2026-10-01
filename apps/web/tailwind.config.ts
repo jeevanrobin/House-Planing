@@ -60,11 +60,14 @@ const config: Config = {
       fontFamily: {
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
         display: ["var(--font-display)", "var(--font-sans)", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        glass: "0 8px 32px 0 rgba(15, 23, 42, 0.12)",
-        "glass-lg": "0 24px 64px -12px rgba(15, 23, 42, 0.25)",
-        glow: "0 0 0 1px hsl(var(--primary) / 0.2), 0 8px 40px -8px hsl(var(--primary) / 0.45)",
+        // Paper sitting on a desk: a tight contact shadow, nothing glowing.
+        sheet: "0 1px 0 hsl(var(--foreground) / 0.04), 0 1px 3px hsl(var(--foreground) / 0.06)",
+        glass: "0 1px 0 hsl(var(--foreground) / 0.04), 0 1px 3px hsl(var(--foreground) / 0.06)",
+        "glass-lg": "0 2px 0 hsl(var(--foreground) / 0.04), 0 8px 24px -12px hsl(var(--foreground) / 0.18)",
+        glow: "none",
       },
       backgroundImage: {
         "grid-light":

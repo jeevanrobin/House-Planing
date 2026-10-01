@@ -9,7 +9,7 @@ import {
   MapPin, PencilRuler, ArrowLeft,
 } from "lucide-react";
 import { RequirementWizard } from "@/components/planner/wizard";
-import { FloorPlanCanvas } from "@/components/planner/floor-plan-canvas";
+import { FloorPlanCanvas, PlanLegend } from "@/components/planner/floor-plan-canvas";
 import { PlotSelector } from "@/components/plot/plot-selector";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
@@ -237,20 +237,17 @@ export default function PlannerPage() {
                   key={`${active}-${editable}`}
                   floor={plan.floors[active]}
                   site={plan.site}
+                  meta={{
+                    project: `${req.bedrooms} BHK Residence`,
+                    subtitle: `${Math.round(plan.plotArea * 10.764).toLocaleString("en-IN")} sq ft plot · ${req.facing}-facing`,
+                    date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                  }}
                   view={view}
                   editable={editable}
                 />
               </div>
 
-              {/* Legend */}
-              <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
-                {[["Indoor", "#FFFFFF"], ["Wet areas", "#E9EEF1"], ["Sit-out / balcony", "#F1E9DA"], ["Paving / terrace", "#EFEBE1"], ["Garden", "#DDE8CF"], ["Pool", "#CFE6F2"]].map(([l, c]) => (
-                  <span key={l} className="flex items-center gap-1.5">
-                    <span className="size-3 rounded border" style={{ background: c }} /> {l}
-                  </span>
-                ))}
-                <span className="flex items-center gap-1.5"><span className="h-0 w-4 border-t-2 border-dashed border-stone-400" /> Setback line</span>
-              </div>
+              <PlanLegend />
             </div>
 
             {/* Sidebar */}

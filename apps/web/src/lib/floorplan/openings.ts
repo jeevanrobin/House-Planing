@@ -33,6 +33,13 @@ const OPEN_PAIRS = new Set(["dining:living", "dining:lounge", "corridor:dining",
   "corridor:corridor", "stair:dining", "stair:living", "stair:corridor", "lounge:stair", "corridor:stair"]);
 
 const WET: RoomType[] = ["bathroom", "toilet", "utility"];
+
+/** Never put a door between a toilet/bath and a kitchen or pooja room. */
+function forbidden(a: RoomType, b: RoomType): boolean {
+  const wet = (t: RoomType) => t === "bathroom" || t === "toilet";
+  const clean = (t: RoomType) => t === "kitchen" || t === "pooja";
+  return (wet(a) && clean(b)) || (wet(b) && clean(a));
+}
 const OUTDOOR: RoomType[] = ["sitout", "balcony", "terrace", "garden", "pool", "parking"];
 const WINDOWED: RoomType[] = [
   "living", "dining", "kitchen", "bedroom", "master_bedroom", "office", "lounge", "pooja", "stair",
@@ -168,7 +175,8 @@ export function placeOpenings(rooms: Room[], fp: Rect, road: "N" | "E" | "S" | "
     if (r.type === "living") continue;
     // Last resort so no room is sealed off: the longest wall to any indoor room.
     if (!connected && !ns.some((n) => isLinked(r, n.o))) {
-      const n = ns.filter((x) => !OUTDOOR.includes(x.o.type) && !x.o.parentId).sort((a, b) => (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
+      const n = ns.filter((x) => !OUTDOOR.includes(x.o.type) && !x.o.parentId && !forbidden(r.type, x.o.type))
+        .sort((a, b) => (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
       if (n) {
         const d = makeDoor(r, n.o, n.s, "door", doorWidth(r.type, "door", 0));
         if (d) { doors.push(d); link(r, n.o); }
@@ -195,7 +203,7 @@ export function placeOpenings(rooms: Room[], fp: Rect, road: "N" | "E" | "S" | "
     for (const r of rooms) {
       if (reached.has(r.id) || r.type === "balcony" || (OUTDOOR.includes(r.type) && r.type !== "terrace")) continue;
       const via = neighbours(r)
-        .filter((n) => reached.has(n.o.id) && PASS.includes(n.o.type) && n.s.hi - n.s.lo >= 0.8)
+        .filter((n) => reached.has(n.o.id) && PASS.includes(n.o.type) && !forbidden(r.type, n.o.type) && n.s.hi - n.s.lo >= 0.8)
         .sort((a, b) => PASS.indexOf(a.o.type) - PASS.indexOf(b.o.type) || (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
       if (!via) continue;
       const kind: Door["kind"] = OPEN_PAIRS.has([r.type, via.o.type].sort().join(":")) ? "opening" : "door";
