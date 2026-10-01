@@ -136,25 +136,32 @@ def test_otp_code_format_validated(client):
 
 
 # ---------- config ----------
-def test_production_rejects_default_jwt_secret():
+@pytest.fixture
+def clean_env(monkeypatch):
+    # CI exports ENV=development; config tests must see only what they pass in.
+    for var in ("ENV", "JWT_SECRET"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_production_rejects_default_jwt_secret(clean_env):
     with pytest.raises(ValueError, match="JWT_SECRET"):
         Settings(_env_file=None, ENV="production")
 
 
-def test_production_rejects_short_jwt_secret():
+def test_production_rejects_short_jwt_secret(clean_env):
     with pytest.raises(ValueError, match="JWT_SECRET"):
         Settings(_env_file=None, ENV="production", JWT_SECRET="short")
 
 
-def test_env_defaults_to_production():
+def test_env_defaults_to_production(clean_env):
     with pytest.raises(ValueError):
         Settings(_env_file=None)
 
 
-def test_production_accepts_strong_secret():
+def test_production_accepts_strong_secret(clean_env):
     s = Settings(_env_file=None, ENV="production", JWT_SECRET="x" * 64)
     assert not s.is_dev
 
 
-def test_development_allows_default_secret():
+def test_development_allows_default_secret(clean_env):
     assert Settings(_env_file=None, ENV="development").is_dev
