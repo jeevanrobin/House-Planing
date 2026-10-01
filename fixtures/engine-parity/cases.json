@@ -1,0 +1,256 @@
+[
+  {
+    "name": "ci-smoke",
+    "note": "Same input as the CI engine smoke test.",
+    "req": {
+      "plotWidth": 12,
+      "plotDepth": 18,
+      "facing": "N",
+      "floors": 2,
+      "bedrooms": 3,
+      "bathrooms": 3,
+      "parking": 1,
+      "balconies": 2,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": true,
+      "budget": "premium",
+      "style": "modern",
+      "luxury": 4
+    }
+  },
+  {
+    "name": "small-east-1f",
+    "note": "Smallest sensible plot, single floor.",
+    "req": {
+      "plotWidth": 9,
+      "plotDepth": 12,
+      "facing": "E",
+      "floors": 1,
+      "bedrooms": 2,
+      "bathrooms": 1,
+      "parking": 0,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "economy",
+      "style": "minimal",
+      "luxury": 1
+    }
+  },
+  {
+    "name": "large-sw-3f",
+    "note": "Large plot, every amenity, 3 floors.",
+    "req": {
+      "plotWidth": 24,
+      "plotDepth": 30,
+      "facing": "SW",
+      "floors": 3,
+      "bedrooms": 5,
+      "bathrooms": 5,
+      "parking": 2,
+      "balconies": 4,
+      "vastu": false,
+      "garden": true,
+      "pool": true,
+      "homeOffice": true,
+      "budget": "luxury",
+      "style": "contemporary",
+      "luxury": 5
+    }
+  },
+  {
+    "name": "square-west-2f",
+    "note": "Square plot; previously split walls differently (rounding).",
+    "req": {
+      "plotWidth": 15,
+      "plotDepth": 15,
+      "facing": "W",
+      "floors": 2,
+      "bedrooms": 4,
+      "bathrooms": 2,
+      "parking": 1,
+      "balconies": 1,
+      "vastu": false,
+      "garden": true,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "traditional",
+      "luxury": 3
+    }
+  },
+  {
+    "name": "bath-share-tie",
+    "note": "4 beds/4 baths over 2 floors: bathroom share hits exactly 0.5.",
+    "req": {
+      "plotWidth": 12,
+      "plotDepth": 18,
+      "facing": "N",
+      "floors": 2,
+      "bedrooms": 4,
+      "bathrooms": 4,
+      "parking": 1,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "modern",
+      "luxury": 3
+    }
+  },
+  {
+    "name": "bath-share-tie-3f",
+    "note": "Bathroom shares with .5 ties across 3 floors.",
+    "req": {
+      "plotWidth": 14,
+      "plotDepth": 20,
+      "facing": "S",
+      "floors": 3,
+      "bedrooms": 6,
+      "bathrooms": 6,
+      "parking": 1,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "modern",
+      "luxury": 3
+    }
+  },
+  {
+    "name": "ne-facing-4f",
+    "note": "Diagonal facing, max floors.",
+    "req": {
+      "plotWidth": 18,
+      "plotDepth": 24,
+      "facing": "NE",
+      "floors": 4,
+      "bedrooms": 6,
+      "bathrooms": 4,
+      "parking": 2,
+      "balconies": 3,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "premium",
+      "style": "modern",
+      "luxury": 3
+    }
+  },
+  {
+    "name": "narrow-deep",
+    "note": "Narrow, deep plot.",
+    "req": {
+      "plotWidth": 6,
+      "plotDepth": 24,
+      "facing": "S",
+      "floors": 1,
+      "bedrooms": 2,
+      "bathrooms": 2,
+      "parking": 0,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "modern",
+      "luxury": 3
+    }
+  },
+  {
+    "name": "poly-trapezoid",
+    "note": "Polygon mode: trapezoid plot.",
+    "req": {
+      "plotWidth": 14,
+      "plotDepth": 20,
+      "facing": "N",
+      "floors": 1,
+      "bedrooms": 3,
+      "bathrooms": 2,
+      "parking": 1,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "modern",
+      "luxury": 3,
+      "plotPolygon": [
+        [
+          0,
+          0
+        ],
+        [
+          14,
+          0
+        ],
+        [
+          12,
+          20
+        ],
+        [
+          2,
+          20
+        ]
+      ]
+    }
+  },
+  {
+    "name": "poly-l-shape",
+    "note": "Polygon mode: L-shaped plot, 2 floors.",
+    "req": {
+      "plotWidth": 20,
+      "plotDepth": 20,
+      "facing": "N",
+      "floors": 2,
+      "bedrooms": 4,
+      "bathrooms": 3,
+      "parking": 1,
+      "balconies": 0,
+      "vastu": true,
+      "garden": false,
+      "pool": false,
+      "homeOffice": false,
+      "budget": "standard",
+      "style": "modern",
+      "luxury": 3,
+      "plotPolygon": [
+        [
+          0,
+          0
+        ],
+        [
+          20,
+          0
+        ],
+        [
+          20,
+          10
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          10,
+          20
+        ],
+        [
+          0,
+          20
+        ]
+      ]
+    }
+  }
+]

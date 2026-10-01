@@ -34,24 +34,14 @@ async def generate(request: Request, body: GenerateIn, user: User = Depends(curr
 async def suggestions(request: Request, body: GenerateIn, user: User = Depends(current_user)) -> dict:
     """Optimisation hints for a generated plan.
 
-    Always returns the deterministic baseline tips. When Claude (via Vertex) is
-    configured, AI design critique is appended; if the model call fails or is
-    unconfigured, the baseline is returned unchanged.
+    Always returns the engine's deterministic suggestions (the same ones the
+    web planner shows). When Claude (via Vertex) is configured, AI design
+    critique is appended; if the model call fails or is unconfigured, the
+    baseline is returned unchanged.
     """
     req = body.requirements.model_dump()
     plan = generate_plan(req)
-    tips: list[dict] = []
-    score = plan["summary"]["vastuScore"]
-    tips.append({
-        "kind": "vastu",
-        "severity": "good" if score >= 75 else "warn",
-        "message": f"Vastu compliance {score}/100.",
-    })
-    tips.append({
-        "kind": "space",
-        "severity": "info",
-        "message": f"Built-up area {plan['summary']['builtUpArea']} m² across {plan['summary']['floors']} floor(s).",
-    })
+    tips: list[dict] = list(plan["suggestions"])
 
     ai_tips = await critique_plan(plan, req)
     if ai_tips:
