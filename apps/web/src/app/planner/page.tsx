@@ -53,6 +53,8 @@ export default function PlannerPage() {
   const onComplete = (r: Requirements) => {
     setReq(r);
     setPlan(generatePlan(r));
+    // Map-drawn plots open on the site plan, so the house is seen in the land's own shape.
+    setView(r.plotPolygon ? "site" : "plan");
     setActive(0);
     setShowUnsafePlan(false);
     setStage("result");

@@ -1,34 +1,43 @@
 /**
- * Floor-plan engine (v3).
+ * Floor-plan engine (v4).
  *
  *  1. Program   – realistic rooms per floor, grouped into front→rear bands.
- *  2. Sizing    – house width chosen for good proportions; depth follows from
- *                 room areas, so the house is sized to the brief, not the plot.
- *  3. Stacking  – every upper floor keeps the staircase exactly above the
- *                 ground-floor stair.
- *  4. Variants  – band orderings and a mirror are tried; the best Vastu /
- *                 daylight score wins.
- *  5. Site      – house set back from the road; parking, pool and garden are
- *                 placed in the open yards, outside the house.
+ *  2. Shape     – the plot is turned so its road frontage is square to the
+ *                 drawing; each band takes the width the land allows at its
+ *                 depth, so the house steps with the plot's shape (one side
+ *                 stays straight as the circulation spine).
+ *  3. Sizing    – house width chosen by laying every floor out and scoring
+ *                 room sizes, plot fit and site features. Rooms compact on
+ *                 tight plots and grow towards villa proportions on big ones.
+ *  4. Stacking  – upper floors sit within the ground floor's outline and keep
+ *                 the staircase exactly above the ground-floor stair.
+ *  5. Variants  – band orderings and a mirror are tried; the best Vastu (true
+ *                 north) / daylight score wins.
+ *  6. Site      – parking, pool and garden go in the open land around the house.
  */
 import {
   BALCONY_D, groundProgram, upperProgram,
   type Band, type FloorProgram, type RoomSpec, type Unit,
 } from "./program";
-import { compactUnit, expandBands, fitDepths, layoutBands, packPrivate, passageUnit, privateBands, targetDepth, type Placed } from "./layout";
-import { placeOpenings, sharedWall } from "./openings";
 import {
-  buildableRect, makePlotFrame, planSite, setbacksFor, toWorldRect, type PlotFrame,
+  compactUnit, expandBands, fitDepths, layoutBands, packPrivate, passageUnit, privateBands, targetDepth,
+  type Extent, type Placed,
+} from "./layout";
+import { placeOpenings, sharedWall } from "./openings";
+import { insetPolygon, polygonArea } from "./polygon-ops";
+import {
+  buildableEnvelope, buildableRect, makePlotFrame, planSite, setbacksFor, toWorldRect,
+  type Envelope, type PlotFrame, type Setbacks,
 } from "./site";
 import { directionOf, vastuRoomScore } from "./vastu";
-import { generateWalls } from "./walls";
-import type { FloorPlan, PlanResult, Rect, Requirements, Room, Suggestion } from "./types";
+import { exteriorEdges, generateWalls } from "./walls";
+import type { FloorPlan, PlanResult, Polygon, Rect, Requirements, Room, Suggestion } from "./types";
 
 export { placeOpenings } from "./openings";
 
 const FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor"];
 const OPEN_TYPES = new Set(["sitout", "balcony", "terrace", "parking"]);
-const MAX_HOUSE_W = 24;
+const MAX_HOUSE_W = 30;
 
 /* ------------------------------------------------------------------ */
 /* Floor structures at a given width                                   */
@@ -108,12 +117,20 @@ function frontBedrooms(prog: FloorProgram, W: number): FloorProgram {
   return { ...prog, bands: prog.bands.map((b) => (b === pub ? { ...b, units } : b)), privateUnits: rest };
 }
 
-function groundStructure(req: Requirements, W: number, porch: boolean, ctx: SiteContext): FloorStructure & { stairBand: number } {
+
+function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boolean, ctx: SiteContext): FloorStructure & { stairBand: number } {
   const raw = groundProgram(req, porch, ctx.fit);
   // Tight plots can drop the sit-out (main door straight onto the front wall).
   const base = ctx.noSitout && !porch ? { ...raw, bands: raw.bands.filter((b) => b.kind !== "sitout"), stairBand: raw.stairBand >= 0 ? raw.stairBand - 1 : -1 } : raw;
   const prog = adjustGround(frontBedrooms(base, W), W);
   const { bands, stairBand, overflow: spill } = expandBands(prog, W);
+  // Maximising a wide plot: spare width in the living and kitchen rows becomes
+  // an open-to-sky courtyard (angan) rather than stretched rooms.
+  if (ctx.maxUse) {
+    bands.forEach((b, i) => {
+      if (b.kind === "public" || b.kind === "service") bands[i] = withFiller(b, W, "Courtyard", `court-${b.kind}-${i}`);
+    });
+  }
   // Rooms that didn't fit their band: try the front band, else (powder room /
   // store with no bedrooms downstairs) leave them out rather than add a hallway.
   const pubIdx = bands.findIndex((b) => b.kind === "public");
@@ -143,8 +160,8 @@ function groundStructure(req: Requirements, W: number, porch: boolean, ctx: Site
       bands[bands.length - 1] = { ...last, units: [...last.units, passageUnit()] };
     }
   }
-  const priv = privateBands(privateUnits, W).map((b, i) =>
-    b.kind === "private" && !b.corridorBehind ? withFiller(b, W, "Courtyard", `court-${i}`) : b);
+  const priv = privateBands(privateUnits, Wpriv).map((b, i) =>
+    b.kind === "private" && !b.corridorBehind ? withFiller(b, Wpriv, "Courtyard", `court-${i}`) : b);
   const all = [...bands, ...priv];
   // Absorbs extra depth when an upper floor is deeper than the ground floor.
   all.push({ kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Court", 0, "gcourt")] }] }], minD: 0, maxD: 99 });
@@ -152,7 +169,7 @@ function groundStructure(req: Requirements, W: number, porch: boolean, ctx: Site
   return { bands: all, frozen: stairBand + 1, stairBand };
 }
 
-function upperStructure(req: Requirements, floor: number, W: number, stairY: number, stairD: number, fit: number): FloorStructure {
+function upperStructure(req: Requirements, floor: number, W: number, Wrear: number, stairY: number, stairD: number, fit: number, maxUse = false): FloorStructure {
   const prog = upperProgram(req, floor, fit);
   const balcony = prog.bands.find((b) => b.kind === "balcony");
   const stair = prog.bands[prog.stairBand];
@@ -174,10 +191,12 @@ function upperStructure(req: Requirements, floor: number, W: number, stairY: num
     ? withFiller({ kind: "front", units: frontUnits, fixedD: frontD, minD: frontD, maxD: frontD }, W, "Open Terrace", `fterr-${floor}`)
     : { kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", W * frontD, `fterr-${floor}`)] }] }], fixedD: frontD, minD: frontD, maxD: frontD };
   if (frontD > 0.3) bands.push(front);
-  bands.push({ ...stair, fixedD: stairD, minD: stairD, maxD: stairD });
+  const stairBand: Band = { ...stair, fixedD: stairD, minD: stairD, maxD: stairD };
+  bands.push(maxUse ? withFiller({ ...stairBand, fixedD: undefined }, W, "Open Terrace", `sterr-${floor}`) : stairBand);
+  if (maxUse) bands[bands.length - 1] = { ...bands[bands.length - 1], fixedD: stairD };
 
-  const rear = privateBands(rearUnits, W).map((b, i) =>
-    b.kind === "private" && !b.corridorBehind ? withFiller(b, W, "Open Terrace", `rterr-${floor}-${i}`) : b);
+  const rear = privateBands(rearUnits, Wrear).map((b, i) =>
+    b.kind === "private" && !b.corridorBehind ? withFiller(b, Wrear, "Open Terrace", `rterr-${floor}-${i}`) : b);
   const frozen = bands.length;
   bands.push(...rear);
   // Unbalanced balconies (front didn't fit): keep the count at the rear.
@@ -187,17 +206,6 @@ function upperStructure(req: Requirements, floor: number, W: number, stairY: num
   // Spare depth behind the rooms becomes an open terrace over the floor below.
   bands.push({ kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", 0, `bterr-${floor}`)] }] }], minD: 0, maxD: 99 });
   return { bands, frozen };
-}
-
-const sumDepth = (bands: Band[], W: number) => bands.reduce((a, b) => a + targetDepth(b, W), 0);
-
-interface Candidate {
-  W: number;
-  D: number;
-  porch: boolean;
-  ground: FloorStructure & { stairBand: number };
-  uppers: FloorStructure[];
-  cost: number;
 }
 
 /** Depth an upper floor needs in front of the stair for its street-facing rooms. */
@@ -224,83 +232,257 @@ function roomPenalty(placed: Placed[]): number {
   return p;
 }
 
-/** Plot-local house rectangle for a width/depth, leaving the front yard for cars. */
-function houseRect(build: Rect, W: number, D: number, req: Requirements, mirror: boolean): Rect {
-  const wantFront = req.parking > 0 ? Math.max(0, 5.6 - build.y) : 0;
-  const y = build.y + Math.max(0, Math.min(wantFront, build.h - D));
-  const spare = build.w - W;
-  const x = spare < 3 ? build.x + spare / 2 : mirror ? build.x + spare : build.x;
-  return { x, y, w: W, h: D };
+/* ------------------------------------------------------------------ */
+/* Shape: band extents that follow the plot                            */
+/* ------------------------------------------------------------------ */
+
+interface SiteContext {
+  frame: PlotFrame;
+  sb: Setbacks;
+  env: Envelope;
+  /** Room-size multiplier (1 = brief as given; < 1 compact; > 1 roomier on big plots). */
+  fit: number;
+  noSitout?: boolean;
+  /** Make full use of the plot: favour wide houses that follow its shape. */
+  maxUse?: boolean;
+}
+
+const cumulative = (depths: number[]) => depths.reduce<number[]>((a, d, i) => [...a, i ? a[i - 1] + depths[i - 1] : 0], []);
+
+/**
+ * Horizontal extent of each ground band, following the envelope. Both sides
+ * of each row follow the land, but the spine side (living above dining,
+ * dining beside the stair) may jog at most 2 m between rows so those rooms
+ * still overlap and connect. Small jogs are smoothed out — fewer jogs build
+ * better — and access rules keep every row reachable.
+ */
+function groundExtents(depths: number[], env: Envelope, y0: number, W: number, anchor: number, bands: Band[]): { ext: Extent[]; missing: number } {
+  const ys = cumulative(depths);
+  const ivs = depths.map((d, i) => (d > 0.01 ? env.extent(y0 + ys[i], y0 + ys[i] + d, anchor) : null));
+  const missing = depths.filter((d, i) => d > 0.01 && !ivs[i]).length;
+  const live = ivs.filter((iv): iv is [number, number] => !!iv);
+  if (!live.length) return { ext: depths.map(() => ({ x0: anchor - W / 2, w: W })), missing: depths.length };
+  // Missing / zero-depth rows borrow the nearest live row's interval.
+  const filled = ivs.map((iv, i) => iv ?? ivs.slice(0, i).reverse().find((v) => v) ?? ivs.slice(i).find((v) => v)!);
+  // Spine on the high-x side; at most W wide.
+  const x1 = filled.map((iv) => iv[1]);
+  const x0 = filled.map((iv, i) => Math.max(iv[0], x1[i] - W));
+  const live2 = (i: number) => depths[i] > 0.01;
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i + 1 < x1.length; i++) {
+      if (!live2(i) || !live2(i + 1)) continue;
+      // Spine: smooth small jogs, cap big ones at 2 m.
+      if (Math.abs(x1[i] - x1[i + 1]) < 0.9) x1[i] = x1[i + 1] = Math.min(x1[i], x1[i + 1]);
+      if (x1[i] - x1[i + 1] > 2) x1[i] = x1[i + 1] + 2;
+      if (x1[i + 1] - x1[i] > 2) x1[i + 1] = x1[i] + 2;
+      // Far side: smooth small jogs.
+      if (Math.abs(x0[i] - x0[i + 1]) < 0.9) x0[i] = x0[i + 1] = Math.max(x0[i], x0[i + 1]);
+    }
+    clampAccess(bands, x0, x1);
+  }
+  for (let i = 0; i < x0.length; i++) {
+    if (!live2(i) && i > 0) { x0[i] = x0[i - 1]; x1[i] = x1[i - 1]; }
+  }
+  return { ext: x0.map((x, i) => ({ x0: x, w: Math.max(0.5, x1[i] - x) })), missing };
+}
+
+/**
+ * Access rules for stepped outlines:
+ *  - front rows (sit-out, living row) don't overhang the row behind on the far
+ *    side — their rooms are reached through it;
+ *  - bedroom rows stay within the hallway that serves them.
+ */
+function clampAccess(bands: Band[], x0: number[], x1: number[]) {
+  for (let i = bands.length - 2; i >= 0; i--) {
+    const k = bands[i].kind;
+    if ((k === "public" || k === "sitout") && bands[i + 1].units.length) x0[i] = Math.max(x0[i], x0[i + 1]);
+  }
+  for (let i = 0; i < bands.length; i++) {
+    if (bands[i].kind !== "corridor") continue;
+    for (const j of [i - 1, i + 1]) {
+      if (j >= 0 && j < bands.length && bands[j].kind === "private") {
+        x0[j] = Math.max(x0[j], x0[i]);
+        x1[j] = Math.min(x1[j], x1[i]);
+      }
+    }
+  }
+}
+
+/** Extent of an upper-floor band: within the ground floor's outline over its depth range. */
+function upperExtents(depths: number[], gDepths: number[], gExt: Extent[], bands: Band[]): Extent[] {
+  const gys = cumulative(gDepths);
+  const ys = cumulative(depths);
+  const x0: number[] = [];
+  const x1: number[] = [];
+  depths.forEach((d, i) => {
+    const a = ys[i];
+    const b = ys[i] + Math.max(d, 0.01);
+    const under = gExt.filter((_, j) => gDepths[j] > 0.01 && gys[j] < b - 1e-6 && gys[j] + gDepths[j] > a + 1e-6);
+    const src = under.length ? under : [gExt[gExt.length - 1]];
+    x0.push(Math.max(...src.map((e) => e.x0)));
+    x1.push(Math.min(...src.map((e) => e.x0 + e.w)));
+  });
+  clampAccess(bands, x0, x1);
+  return x0.map((x, i) => ({ x0: x, w: Math.max(0.5, x1[i] - x) }));
+}
+
+const widthIn = (ext: Extent[], bands: Band[], pred: (b: Band) => boolean, fallback: number) => {
+  const ws = ext.filter((_, i) => pred(bands[i]) && bands[i].units.length).map((e) => e.w);
+  return ws.length ? Math.min(...ws) : fallback;
+};
+const isPrivateBand = (b: Band) => b.kind === "private" || b.kind === "corridor";
+
+interface Candidate {
+  W: number;
+  D: number;
+  /** House front, plot-local. */
+  y0: number;
+  porch: boolean;
+  ground: FloorStructure & { stairBand: number };
+  uppers: FloorStructure[];
+  gDepths: number[];
+  gExt: Extent[];
+  uDepths: number[][];
+  uExt: Extent[][];
+  /** Depth scale (< 1 only when the plot is too shallow for the brief). */
+  k: number;
+  cost: number;
 }
 
 function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: boolean): Candidate {
-  const ground = groundStructure(req, W, porch, ctx);
+  const { env } = ctx;
+  const anchor = env.center();
+  const wantFront = (req.parking > 0 && !porch) ? 5.6 : 0;
+
+  // Pass 1: lay out at the nominal width to see where the plot pinches.
+  let ground = groundStructure(req, W, W, porch, ctx);
+  let depths = ground.bands.map((b) => targetDepth(b, W));
+  // Narrowest a band of rooms can usefully be: land narrower than this isn't buildable depth.
+  const minBand = Math.min(W, 5.0);
+  const front0 = env.firstWideRow(minBand);
+  const usable = env.usableDepth(front0, minBand);
+  // Default: the house starts just behind the front setback (plus room for cars).
+  // Maximising: slide it back to where the land is widest over the house's
+  // depth, the "heart" of an irregular plot (the front becomes garden/drive).
+  const yFront = (total: number) => {
+    const base = front0 + Math.max(0, Math.min(wantFront, usable - total));
+    if (!ctx.maxUse) return base;
+    let best = base;
+    let bestW = -1;
+    for (let y = base; y + total <= front0 + usable + 1e-6; y += 0.5) {
+      const iv = env.extent(y, y + total, anchor);
+      const w = iv ? iv[1] - iv[0] : 0;
+      if (w > bestW + 0.25) { bestW = w; best = y; }
+    }
+    return best;
+  };
+  let y0 = yFront(depths.reduce((a, b) => a + b, 0));
+  let { ext } = groundExtents(depths, env, y0, W, anchor, ground.bands);
+
+  // Pass 2: rebuild each section for the width the plot actually allows there.
+  const Wfront = Math.min(W, widthIn(ext, ground.bands, (b) => !isPrivateBand(b) && b.kind !== "sitout", W));
+  const Wpriv = Math.min(W, widthIn(ext, ground.bands, isPrivateBand, W));
+  ground = groundStructure(req, Wfront, Wpriv, porch, ctx);
+  const nominal = ground.bands.map((b) => (isPrivateBand(b) ? Wpriv : Wfront));
+  depths = ground.bands.map((b, i) => targetDepth(b, nominal[i]));
+  y0 = yFront(depths.reduce((a, b) => a + b, 0));
+  ({ ext } = groundExtents(depths, env, y0, W, anchor, ground.bands));
+  depths = ground.bands.map((b, i) => targetDepth(b, ext[i].w));
+
+  // Deepen the front of the ground floor if upper floors need it for their bedrooms.
   const si = ground.stairBand;
   if (si >= 0) {
-    // Deepen the front of the ground floor if upper floors need it for their bedrooms.
-    const depths = ground.bands.map((b) => targetDepth(b, W));
     const stairY = depths.slice(0, si).reduce((a, b) => a + b, 0);
     let need = 0;
-    for (let f = 1; f < req.floors; f++) need = Math.max(need, upperFrontNeed(req, f, W, ctx.fit));
+    for (let f = 1; f < req.floors; f++) need = Math.max(need, upperFrontNeed(req, f, Wfront, ctx.fit));
     const grow = Math.min(need - stairY, 3);
     const j = ground.bands.slice(0, si).map((b, i) => (b.fixedD === undefined && b.units.length ? i : -1)).filter((i) => i >= 0).pop();
     if (grow > 0.05 && j !== undefined) {
       const nd = depths[j] + grow;
       ground.bands[j] = { ...ground.bands[j], fixedD: nd, minD: nd, maxD: nd };
+      depths[j] = nd;
     }
   }
-  const gDepths = ground.bands.map((b) => targetDepth(b, W));
-  const gTotal = gDepths.reduce((a, b) => a + b, 0);
-  const stairY = si >= 0 ? gDepths.slice(0, si).reduce((a, b) => a + b, 0) : 0;
-  const stairD = si >= 0 ? gDepths[si] : 0;
+  const stairY = si >= 0 ? depths.slice(0, si).reduce((a, b) => a + b, 0) : 0;
+  const stairD = si >= 0 ? depths[si] : 0;
+  const gys = cumulative(depths);
+  const rearW = si >= 0 ? Math.min(...ext.filter((_, i) => i > si && depths[i] > 0.01).map((e) => e.w), Wfront) : Wfront;
 
+  // Upper floors sit within the ground floor's outline.
   const uppers: FloorStructure[] = [];
-  let D = gTotal;
+  let D = depths.reduce((a, b) => a + b, 0);
   for (let f = 1; f < req.floors; f++) {
-    const st = upperStructure(req, f, W, stairY, stairD, ctx.fit);
+    const st = upperStructure(req, f, Wfront, Number.isFinite(rearW) ? rearW : Wfront, stairY, stairD, ctx.fit, ctx.maxUse);
     uppers.push(st);
-    D = Math.max(D, sumDepth(st.bands, W));
+    const ue = upperExtents(st.bands.map((b) => targetDepth(b, Wfront)), depths, ext, st.bands);
+    D = Math.max(D, st.bands.reduce((a, b, i) => a + targetDepth(b, ue[i].w), 0));
+  }
+  void gys;
+
+  // Final depths at the shared house depth D, compressed if the plot is too shallow.
+  y0 = yFront(D);
+  const avail = env.usableDepth(y0, minBand);
+  const k = D > avail ? avail / D : 1;
+  let gDepths = fitDepths(ground.bands, ext, D, ground.frozen).map((d) => d * k);
+  const shaped = groundExtents(gDepths, env, y0, W, anchor, ground.bands);
+  const gExt = shaped.ext;
+  gDepths = gDepths.map((d) => d);
+  const uDepths: number[][] = [];
+  const uExt: Extent[][] = [];
+  for (const st of uppers) {
+    const guess = upperExtents(st.bands.map((b) => targetDepth(b, Wfront)), gDepths.map((d) => d / k), gExt, st.bands);
+    const ud = fitDepths(st.bands, guess, D, st.frozen).map((d) => d * k);
+    uDepths.push(ud);
+    uExt.push(upperExtents(ud, gDepths, gExt, st.bands));
   }
 
-  const Dfit = Math.min(D, ctx.build.h);
-  const k = Dfit / D;
+  // Score: rooms near their targets, plot fit, site features, few jogs.
   const structures = [ground, ...uppers];
-  const rooms = structures.reduce((a, st) => {
-    const { rooms: placed } = layoutBands(st.bands, fitDepths(st.bands, W, D, st.frozen), W, () => false);
-    return a + roomPenalty(placed.map((p) => ({ ...p, y: p.y * k, h: p.h * k })));
-  }, 0);
+  const allDepths = [gDepths, ...uDepths];
+  const allExt = [gExt, ...uExt];
+  const rooms = structures.reduce((a, st, i) => a + roomPenalty(layoutBands(st.bands, allDepths[i], allExt[i], () => false).rooms), 0);
   const filler = structures.flatMap((st) => st.bands).flatMap((b) => b.units).flatMap((u) => u.cols)
     .flatMap((c) => c.rooms).filter((r) => r.type === "terrace").reduce((a, r) => a + r.area, 0);
+  const blocks = bandRects(gDepths, gExt, y0);
   const siteReq = porch ? { ...req, parking: 0 as const } : req;
-  // A missing car (that the user asked for) is costly; pool/garden less so.
-  const siteWarnings = planSite(ctx.frame, houseRect(ctx.build, W, Dfit, siteReq, false), siteReq, ctx.sb).warnings;
+  const siteWarnings = planSite(ctx.frame, bbox(blocks), siteReq, ctx.sb, blocks, false).warnings;
   const site = siteWarnings.reduce((a, w) => a + (w.includes("car space") ? 3.5 : 1), 0);
-  const over = Math.max(0, D - ctx.build.h);
+  const jogs = gExt.filter((e, i) => i > 0 && gDepths[i] > 0.01 && gDepths[i - 1] > 0.01 && Math.abs(e.x0 - gExt[i - 1].x0) > 0.05).length;
+  const over = Math.max(0, D - avail);
   const aspect = Math.abs(Math.log(D / W / 1.15));
-  // A yard parking spot is preferred; a porch must earn its place.
-  const cost = over * 40 + rooms * 3 + aspect * 4 + (filler / (W * D)) * 12 + site * 10 + (porch ? 4 : 0);
-  return { W, D, porch, ground, uppers, cost };
+  // "Maximise the plot": prefer houses as wide as the land, so the outline follows it.
+  const usePull = ctx.maxUse ? (1 - W / Math.min(env.maxWidth(), MAX_HOUSE_W)) * 25 : 0;
+  const cost = over * 40 + rooms * 3 + aspect * (ctx.maxUse ? 1 : 4) + (filler / (W * D)) * (ctx.maxUse ? 4 : 12)
+    + site * 10 + (porch ? 4 : 0) + jogs * (ctx.maxUse ? 0.3 : 0.8) + shaped.missing * 50 + usePull;
+  if (process.env.PLAN_DEBUG && !porch && ctx.maxUse) console.log("W", W.toFixed(2), "fit", ctx.fit.toFixed(2), "cost", cost.toFixed(1), JSON.stringify({ over: +over.toFixed(2), rooms: +(rooms * 3).toFixed(1), filler: +((filler / (W * D)) * 4).toFixed(1), site, jogs, miss: shaped.missing, usePull: +usePull.toFixed(1), D: +D.toFixed(1), k: +k.toFixed(2), maxW: +env.maxWidth().toFixed(1), ext: gExt.map((e) => +e.w.toFixed(1)) }));
+  return { W, D, y0, porch, ground, uppers, gDepths, gExt, uDepths, uExt, k, cost };
 }
 
-interface SiteContext {
-  frame: PlotFrame;
-  build: Rect;
-  sb: ReturnType<typeof setbacksFor>;
-  /** Room-size multiplier (1 = brief as given; lower = compact rooms for tight plots). */
-  fit: number;
-  noSitout?: boolean;
+/** Footprint rectangles (plot-local) of a set of bands. */
+function bandRects(depths: number[], ext: Extent[], y0: number): Rect[] {
+  const ys = cumulative(depths);
+  return depths.map((d, i) => ({ x: ext[i].x0, y: y0 + ys[i], w: ext[i].w, h: d })).filter((r) => r.h > 0.01);
 }
 
-/** Best house width (and parking strategy) for a given room-size multiplier. */
+function bbox(rects: Rect[]): Rect {
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  return { x, y, w: Math.max(...rects.map((r) => r.x + r.w)) - x, h: Math.max(...rects.map((r) => r.y + r.h)) - y };
+}
+
+/** Best house width (and parking strategy): a coarse sweep, then a fine one around the winner. */
 function chooseCandidate(req: Requirements, ctx: SiteContext): Candidate {
-  const maxW = Math.min(ctx.build.w, MAX_HOUSE_W);
+  const maxW = Math.min(ctx.env.maxWidth(), MAX_HOUSE_W);
   let best: Candidate | null = null;
-  for (let W = Math.min(6, maxW); W <= maxW + 1e-9; W += 0.25) {
+  const tryW = (W: number) => {
     for (const porch of req.parking > 0 ? [false, true] : [false]) {
       const c = evaluateWidth(req, W, ctx, porch);
       if (!best || c.cost < best.cost) best = c;
     }
-  }
+  };
+  for (let W = Math.min(6, maxW); W <= maxW + 1e-9; W += 0.5) tryW(W);
+  const centre = best!.W;
+  for (const W of [centre - 0.25, centre + 0.25]) if (W >= Math.min(6, maxW) && W <= maxW) tryW(W);
   return best!;
 }
 
@@ -308,56 +490,50 @@ function chooseCandidate(req: Requirements, ctx: SiteContext): Candidate {
 /* Scoring & placement                                                 */
 /* ------------------------------------------------------------------ */
 
-function computeVastu(rooms: Room[], fp: Rect): number {
+function computeVastu(rooms: Room[], fp: Rect, northDeg: number): number {
   const scored = rooms.filter((r) => r.idealDir);
   if (!scored.length) return 100;
-  const sum = scored.reduce((a, r) => a + vastuRoomScore(directionOf(r.x + r.w / 2, r.y + r.h / 2, fp), r.idealDir!), 0);
+  const sum = scored.reduce((a, r) => a + vastuRoomScore(directionOf(r.x + r.w / 2, r.y + r.h / 2, fp, northDeg), r.idealDir!), 0);
   return Math.round((sum / scored.length) * 100);
 }
 
-function touchesBoundary(r: Rect, fp: Rect): boolean {
-  const e = 0.02;
-  return Math.abs(r.x - fp.x) < e || Math.abs(r.y - fp.y) < e
-    || Math.abs(r.x + r.w - (fp.x + fp.w)) < e || Math.abs(r.y + r.h - (fp.y + fp.h)) < e;
-}
-
 /** Daylight: an outside wall, or a wall onto a sit-out / balcony / terrace. */
-function hasDaylight(r: Room, rooms: Room[], fp: Rect): boolean {
-  return touchesBoundary(r, fp) || rooms.some((o) => OPEN_TYPES.has(o.type) && !!sharedWall(r, o));
+function hasDaylight(r: Room, rooms: Room[]): boolean {
+  return exteriorEdges(r, rooms).some((e) => e.iv.b - e.iv.a > 0.9)
+    || rooms.some((o) => OPEN_TYPES.has(o.type) && !!sharedWall(r, o));
 }
 
-function floorScore(rooms: Room[], fp: Rect, req: Requirements): number {
+function floorScore(rooms: Room[], fp: Rect, req: Requirements, northDeg: number): number {
   const beds = rooms.filter((r) => r.type === "bedroom" || r.type === "master_bedroom");
-  const lit = beds.length ? beds.filter((b) => hasDaylight(b, rooms, fp)).length / beds.length : 1;
+  const lit = beds.length ? beds.filter((b) => hasDaylight(b, rooms)).length / beds.length : 1;
   const kitchen = rooms.find((r) => r.type === "kitchen");
-  const kitchenLit = kitchen && touchesBoundary(kitchen, fp) ? 1 : 0;
-  return (req.vastu ? computeVastu(rooms, fp) / 100 : 0) + 0.25 * lit + 0.1 * kitchenLit;
+  const kitchenLit = kitchen && exteriorEdges(kitchen, rooms).length ? 1 : 0;
+  return (req.vastu ? computeVastu(rooms, fp, northDeg) / 100 : 0) + 0.25 * lit + 0.1 * kitchenLit;
 }
 
 interface Placement {
   frame: PlotFrame;
-  /** House rectangle in plot-local coordinates. */
-  local: Rect;
+  y0: number;
+  /** Reflect the layout across the plot (x → pw − x). */
   mirror: boolean;
-  /** House footprint in world coordinates. */
-  world: Rect;
 }
 
-function toRooms(placed: Placed[], p: Placement, W: number): Room[] {
-  const keyToId = new Map(placed.map((pl) => [pl.spec.key, pl.spec.key]));
-  return placed.map((pl) => {
-    const lx = p.mirror ? W - pl.x - pl.w : pl.x;
-    const world = toWorldRect(p.frame, { x: p.local.x + lx, y: p.local.y + pl.y, w: pl.w, h: pl.h });
-    return {
-      id: pl.spec.key,
-      type: pl.spec.type,
-      label: pl.spec.label,
-      zone: pl.spec.zone,
-      idealDir: pl.spec.idealDir,
-      parentId: pl.spec.parentKey && keyToId.has(pl.spec.parentKey) ? pl.spec.parentKey : undefined,
-      ...world,
-    };
-  });
+function toWorld(p: Placement, r: Rect): Rect {
+  const x = p.mirror ? p.frame.pw - r.x - r.w : r.x;
+  return toWorldRect(p.frame, { x, y: r.y, w: r.w, h: r.h });
+}
+
+function toRooms(placed: Placed[], p: Placement): Room[] {
+  const keys = new Set(placed.map((pl) => pl.spec.key));
+  return placed.map((pl) => ({
+    id: pl.spec.key,
+    type: pl.spec.type,
+    label: pl.spec.label,
+    zone: pl.spec.zone,
+    idealDir: pl.spec.idealDir,
+    parentId: pl.spec.parentKey && keys.has(pl.spec.parentKey) ? pl.spec.parentKey : undefined,
+    ...toWorld(p, { x: pl.x, y: p.y0 + pl.y, w: pl.w, h: pl.h }),
+  }));
 }
 
 /** All band-reversal combinations worth trying for a floor (capped). */
@@ -372,39 +548,61 @@ function reversalSets(bands: Band[]): boolean[][] {
   return sets;
 }
 
-/**
- * Lay a floor out at its natural depth D, then scale depths by `k` (< 1 only
- * when the plot is too shallow — every floor scales alike, so stairs still stack).
- */
-function bestFloor(s: FloorStructure, W: number, D: number, k: number, p: Placement, req: Requirements): { rooms: Room[]; score: number } {
-  const depths = fitDepths(s.bands, W, D, s.frozen).map((d) => d * k);
+function bestFloor(s: FloorStructure, depths: number[], ext: Extent[], p: Placement, fp: Rect, req: Requirements): { rooms: Room[]; score: number } {
   let best: { rooms: Room[]; score: number } | null = null;
   for (const rev of reversalSets(s.bands)) {
-    const { rooms: placed } = layoutBands(s.bands, depths, W, (_, i) => rev[i]);
-    const rooms = toRooms(placed, p, W);
-    const score = floorScore(rooms, p.world, req);
+    const { rooms: placed } = layoutBands(s.bands, depths, ext, (_, i) => rev[i]);
+    const rooms = toRooms(placed, p);
+    const score = floorScore(rooms, fp, req, p.frame.northDeg);
     if (!best || score > best.score + 1e-9) best = { rooms, score };
   }
   return best!;
+}
+
+/** Outline of stacked band rectangles (each overlapping the next), plot-local. */
+function outline(rects: Rect[]): Polygon {
+  if (!rects.length) return [];
+  const pts: Polygon = [];
+  // Down the high-x side, then back up the low-x side.
+  for (const r of rects) pts.push([r.x + r.w, r.y], [r.x + r.w, r.y + r.h]);
+  for (let i = rects.length - 1; i >= 0; i--) pts.push([rects[i].x, rects[i].y + rects[i].h], [rects[i].x, rects[i].y]);
+  const out: Polygon = [];
+  for (const q of pts) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[0] - q[0]) < 1e-6 && Math.abs(last[1] - q[1]) < 1e-6) continue;
+    out.push(q);
+  }
+  // Drop collinear points.
+  return out.filter((q, i) => {
+    const a = out[(i - 1 + out.length) % out.length];
+    const b = out[(i + 1) % out.length];
+    return Math.abs((q[0] - a[0]) * (b[1] - a[1]) - (q[1] - a[1]) * (b[0] - a[0])) > 1e-6;
+  });
 }
 
 /* ------------------------------------------------------------------ */
 /* Metrics, suggestions, validation                                    */
 /* ------------------------------------------------------------------ */
 
-function floorMetrics(rooms: Room[], fp: Rect, walls: ReturnType<typeof generateWalls>) {
+function floorMetrics(rooms: Room[], fp: Rect, outlinePoly: Polygon, walls: ReturnType<typeof generateWalls>, northDeg: number) {
   const open = rooms.filter((r) => r.type === "terrace").reduce((a, r) => a + r.w * r.h, 0);
-  const builtUpArea = fp.w * fp.h - open;
+  const builtUpArea = polygonArea(outlinePoly) - open;
   const indoor = rooms.filter((r) => !OPEN_TYPES.has(r.type)).reduce((a, r) => a + r.w * r.h, 0);
   const wallArea = walls.filter((w) => w.type !== "railing")
     .reduce((a, w) => a + Math.hypot(w.x2 - w.x1, w.y2 - w.y1) * w.thickness, 0);
   const carpetArea = Math.max(0, indoor - wallArea);
+  let perimeter = 0;
+  for (let i = 0; i < outlinePoly.length; i++) {
+    const [ax, ay] = outlinePoly[i];
+    const [bx, by] = outlinePoly[(i + 1) % outlinePoly.length];
+    perimeter += Math.hypot(bx - ax, by - ay);
+  }
   return {
     builtUpArea,
     carpetArea,
     efficiency: builtUpArea > 0 ? carpetArea / builtUpArea : 0,
-    perimeter: 2 * (fp.w + fp.h),
-    vastuScore: computeVastu(rooms, fp),
+    perimeter,
+    vastuScore: computeVastu(rooms, fp, northDeg),
   };
 }
 
@@ -414,11 +612,10 @@ export function planVastuScore(plan: PlanResult): number {
 
 function buildSuggestions(plan: PlanResult, req: Requirements, siteWarnings: string[]): Suggestion[] {
   const out: Suggestion[] = [];
-  const fp = plan.footprint;
   let blind = 0;
   for (const f of plan.floors) {
     for (const r of f.rooms) {
-      if ((r.type === "bedroom" || r.type === "master_bedroom") && !hasDaylight(r, f.rooms, fp)) blind++;
+      if ((r.type === "bedroom" || r.type === "master_bedroom") && !hasDaylight(r, f.rooms)) blind++;
     }
   }
   out.push(
@@ -436,12 +633,14 @@ function buildSuggestions(plan: PlanResult, req: Requirements, siteWarnings: str
     });
   }
 
+  const ground = plan.floors[0];
+  const footprint = ground.footprintPolygon ? polygonArea(ground.footprintPolygon) : plan.footprint.w * plan.footprint.h;
   const built = plan.floors.reduce((a, f) => a + f.metrics.builtUpArea, 0);
-  const coverage = (fp.w * fp.h) / plan.plotArea;
+  const coverage = footprint / plan.plotArea;
   out.push({
     kind: "space",
     severity: coverage <= 0.65 ? "good" : "info",
-    message: `House footprint ${Math.round(fp.w * fp.h)} m² (${Math.round(coverage * 100)}% ground coverage), ${Math.round(built)} m² built-up across ${plan.floors.length} floor(s).`,
+    message: `House footprint ${Math.round(footprint)} m² (${Math.round(coverage * 100)}% ground coverage), ${Math.round(built)} m² built-up across ${plan.floors.length} floor(s).`,
   });
 
   if (req.floors > 1) {
@@ -489,68 +688,119 @@ export function validatePlanRequirements(plan: PlanResult, req: Requirements): {
 /* Entry point                                                         */
 /* ------------------------------------------------------------------ */
 
+/** Mirror a plot-local polygon across the plot (x → pw − x). */
+function mirrored(frame: PlotFrame): PlotFrame {
+  return { ...frame, local: frame.local.map(([x, y]) => [frame.pw - x, y] as [number, number]).reverse() };
+}
+
 export function generatePlan(req: Requirements): PlanResult {
+  const plan = generateShaped(req);
+  if (plan.floors.every((f) => f.rooms.length) || !req.plotPolygon) return plan;
+  // Shape-following failed on an unusual plot: plan the largest rectangle inside it instead.
   const frame = makePlotFrame(req);
   const sb = setbacksFor(frame.pw, frame.pd);
-  const build = buildableRect(frame, sb);
+  const r = buildableRect(frame, sb);
+  const rectPlan = generateShaped({ ...req, plotPolygon: undefined, plotWidth: r.w + 2 * sb.side, plotDepth: r.h + sb.front + sb.rear });
+  rectPlan.suggestions.push({ kind: "space", severity: "warn", message: "This plot's outline is unusual, so the plan uses the largest regular area inside it." });
+  return rectPlan;
+}
 
-  // 1–2. Pick the house width. If the brief doesn't fit, compact step by step:
-  // slightly smaller rooms first, then drop the sit-out, then smaller again.
-  const attempts: { fit: number; noSitout: boolean }[] = [
-    { fit: 1, noSitout: false }, { fit: 0.9, noSitout: false }, { fit: 1, noSitout: true },
-    { fit: 0.9, noSitout: true }, { fit: 0.8, noSitout: false }, { fit: 0.8, noSitout: true },
-    { fit: 0.72, noSitout: true },
-  ];
-  let cand: Candidate | null = null;
-  let fit = 1;
-  for (const a of attempts) {
-    const next = chooseCandidate(req, { frame, build, sb, ...a });
-    if (!cand || next.D < cand.D - 0.05) { cand = next; fit = a.fit; }
-    if (cand.D <= build.h + 0.05) break;
-  }
-  if (!cand) throw new Error("No layout candidate");
-  const W = cand.W;
-  const D = Math.min(cand.D, build.h);
-  const k = D / cand.D;
-  const siteReq = cand.porch ? { ...req, parking: 0 as const } : req;
+function generateShaped(req: Requirements): PlanResult {
+  const frame = makePlotFrame(req);
+  const sb = setbacksFor(frame.pw, frame.pd);
 
-  // 5. Where the house sits: room in front for cars, and one usable side yard.
-  let chosen: { floors: Room[][]; score: number; placement: Placement } | null = null;
+  let chosen: { floors: Room[][]; score: number; cand: Candidate; placement: Placement; fit: number; rects: Rect[] } | null = null;
   for (const mirror of [false, true]) {
-    const local = houseRect(build, W, D, siteReq, mirror);
-    const placement: Placement = { frame, local, mirror, world: toWorldRect(frame, local) };
-    const floors = [cand.ground, ...cand.uppers].map((s) => bestFloor(s, W, cand!.D, k, placement, req));
-    const score = floors.reduce((a, f) => a + f.score, 0);
-    if (!chosen || score > chosen.score + 1e-9) chosen = { floors: floors.map((f) => f.rooms), score, placement };
+    // The layout always runs with its spine on the right; mirroring the plot
+    // gives the left-spine variant (and the other Vastu orientation).
+    const f2 = mirror ? mirrored(frame) : frame;
+    const env = buildableEnvelope(f2, sb);
+    const base = { frame: f2, sb, env };
+
+    // Fit the brief: compact step by step when it doesn't fit; on generous
+    // plots, let rooms grow towards villa proportions.
+    const attempts: { fit: number; noSitout: boolean }[] = [
+      { fit: 1, noSitout: false }, { fit: 0.9, noSitout: false }, { fit: 1, noSitout: true },
+      { fit: 0.9, noSitout: true }, { fit: 0.8, noSitout: false }, { fit: 0.8, noSitout: true },
+      { fit: 0.72, noSitout: true },
+    ];
+    let cand: Candidate | null = null;
+    let fit = 1;
+    for (const a of attempts) {
+      const next = chooseCandidate(req, { ...base, ...a });
+      if (!cand || next.D * (1 / next.k) < cand.D * (1 / cand.k) - 0.05 || (next.k === 1 && cand.k < 1)) { cand = next; fit = a.fit; }
+      if (cand.k >= 1) break;
+    }
+    if (!cand) throw new Error("No layout candidate");
+    // Generous plots: let rooms grow. "Maximise" aims for ~60% ground coverage
+    // of the buildable land (a typical bye-law ceiling); "balanced" ~42%.
+    const maxUse = (req.plotUse ?? (req.plotPolygon ? "max" : "balanced")) === "max";
+    if (fit === 1 && cand.k >= 1) {
+      const footprint = bandRects(cand.gDepths, cand.gExt, cand.y0).reduce((a, r) => a + r.w * r.h, 0);
+      const target = (maxUse ? 0.6 : 0.42) * env.area();
+      const roomier = Math.min(maxUse ? 1.9 : 1.45, Math.sqrt(target / Math.max(footprint, 1)));
+      for (const f of [roomier, 1 + (roomier - 1) * 0.6, 1 + (roomier - 1) * 0.3]) {
+        if (f <= 1.05) break;
+        const big = chooseCandidate(req, { ...base, fit: f, maxUse });
+        if (big.k >= 1) { cand = big; fit = f; break; }
+      }
+    }
+
+    const placement: Placement = { frame, y0: cand.y0, mirror };
+    const rects = bandRects(cand.gDepths, cand.gExt, cand.y0);
+    const fp = bboxOf(rects.map((r) => toWorld(placement, r)));
+    const all = [cand.ground, ...cand.uppers];
+    const depths = [cand.gDepths, ...cand.uDepths];
+    const exts = [cand.gExt, ...cand.uExt];
+    const floors = all.map((st, i) => bestFloor(st, depths[i], exts[i], { ...placement, y0: cand!.y0 }, fp, req));
+    const score = floors.reduce((a, f) => a + f.score, 0) - cand.cost * 0.01;
+    if (!chosen || score > chosen.score + 1e-9) chosen = { floors: floors.map((f) => f.rooms), score, cand, placement, fit, rects };
   }
-  const { placement } = chosen!;
-  const fp = placement.world;
+
+  const { cand, placement, fit, rects } = chosen!;
+  const toWorldPt = ([x, y]: [number, number]) => {
+    const r = toWorld(placement, { x, y, w: 0, h: 0 });
+    return [r.x, r.y] as [number, number];
+  };
+  const groundOutline = outline(rects).map(toWorldPt);
+  const fp = bboxOf(rects.map((r) => toWorld(placement, r)));
+  const floorOutlines = [groundOutline, ...cand.uppers.map((_, i) => outline(bandRects(cand.uDepths[i], cand.uExt[i], cand.y0)).map(toWorldPt))];
 
   const floors: FloorPlan[] = chosen!.floors.map((rooms, i) => {
     const { doors, windows } = placeOpenings(rooms, fp, frame.road);
-    const walls = generateWalls(rooms, fp);
+    const walls = generateWalls(rooms);
     return {
       floor: i,
       name: FLOOR_NAMES[i] ?? `Floor ${i}`,
       roadSide: frame.road,
       footprint: fp,
+      footprintPolygon: floorOutlines[i],
       rooms,
       doors,
       windows,
       walls,
-      metrics: floorMetrics(rooms, fp, walls),
+      metrics: floorMetrics(rooms, fp, floorOutlines[i], walls, frame.northDeg),
     };
   });
 
-  const site = planSite(frame, placement.local, siteReq, sb);
+  const siteReq = cand.porch ? { ...req, parking: 0 as const } : req;
+  const siteFrame = placement.mirror ? mirrored(frame) : frame;
+  const site = planSite(siteFrame, bbox(rects), siteReq, sb, rects);
+  const envRect = buildableEnvelope(frame, sb);
+  void envRect;
   const result: PlanResult = {
     plotArea: frame.area,
     footprint: fp,
     site: {
       plot: frame.world,
-      buildable: toWorldRect(frame, build),
+      buildable: toWorldRect(frame, buildableRect(frame, sb)),
+      setbackLine: setbackPolygon(frame, sb).map(([x, y]) => {
+        const w = toWorldRect(frame, { x, y, w: 0, h: 0 });
+        return [w.x, w.y] as [number, number];
+      }),
       roadSide: frame.road,
-      elements: site.elements.map((e) => ({ ...e, ...toWorldRect(frame, e) })),
+      northDeg: frame.northDeg,
+      elements: site.elements.map((e) => ({ ...e, ...toWorld(placement, e) })),
     },
     setback: sb,
     floors,
@@ -562,11 +812,31 @@ export function generatePlan(req: Requirements): PlanResult {
   }
   if (fit < 1) {
     result.suggestions.push({ kind: "space", severity: "info", message: `Rooms were sized compactly (about ${Math.round(fit * 100)}% of the usual size for this finish level) to fit the plot.` });
+  } else if (fit > 1) {
+    result.suggestions.push({ kind: "space", severity: "good", message: `The plot is generous, so rooms are about ${Math.round((fit - 1) * 100)}% larger than a standard home of this finish level.` });
   }
-  if (cand.D > build.h + 0.05) {
-    warnings.push(`The brief needs ${cand.D.toFixed(1)} m of depth but only ${build.h.toFixed(1)} m is buildable, so rooms were compressed.`);
+  if (rects.some((r) => Math.abs(r.x - rects[0].x) > 0.05 || Math.abs(r.w - rects[0].w) > 0.05)) {
+    result.suggestions.push({ kind: "space", severity: "info", message: "The house steps in where the plot narrows, so it follows the shape of your land instead of a plain rectangle." });
+  }
+  if (cand.k < 1) {
+    warnings.push(`The brief needs ${(cand.D).toFixed(1)} m of depth but the plot allows ${(cand.D * cand.k).toFixed(1)} m, so rooms were compressed.`);
   }
   result.suggestions = [...buildSuggestions(result, req, warnings), ...result.suggestions];
   result.validation = validatePlanRequirements(result, req);
   return result;
+}
+
+/** The setback line in plot-local metres: the buildable rectangle, or the plot inset by the side setback. */
+function setbackPolygon(frame: PlotFrame, sb: Setbacks): Polygon {
+  const rectPlot = frame.local.length === 4 && Math.abs(polygonArea(frame.local) - frame.pw * frame.pd) < 1e-6;
+  if (rectPlot) {
+    const r = buildableRect(frame, sb);
+    return [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
+  }
+  const inset = insetPolygon(frame.local, sb.side);
+  return inset.length >= 3 ? inset : frame.local;
+}
+
+function bboxOf(rects: Rect[]): Rect {
+  return bbox(rects);
 }

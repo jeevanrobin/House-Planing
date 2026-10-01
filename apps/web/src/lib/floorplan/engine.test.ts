@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generatePlan } from "./engine";
-import { pointInPolygon } from "./polygon-ops";
+import { pointInPolygon, polygonArea } from "./polygon-ops";
 import { toFloorPlanJSON } from "./serialize";
 import type { FloorPlan, PlanResult, Rect, Requirements } from "./types";
 
@@ -76,7 +76,7 @@ function expectWellFormed(p: PlanResult) {
   const fp = p.footprint;
   for (const f of p.floors) {
     const area = f.rooms.reduce((a, r) => a + r.w * r.h, 0);
-    expect(area, `${f.name} rooms tile the house`).toBeCloseTo(fp.w * fp.h, 1);
+    expect(area, `${f.name} rooms tile the house outline`).toBeCloseTo(polygonArea(f.footprintPolygon!), 1);
     for (const r of f.rooms) {
       expect(r.x >= fp.x - E && r.y >= fp.y - E && r.x + r.w <= fp.x + fp.w + E && r.y + r.h <= fp.y + fp.h + E,
         `${r.label} inside footprint`).toBe(true);
@@ -97,9 +97,10 @@ function expectWellFormed(p: PlanResult) {
         .toBeLessThan(E);
     }
   }
-  expect(inside(fp, p.site.plot), "house on the plot").toBe(true);
+  for (const r of p.floors[0].rooms) expect(inside(r, p.site.plot), `${r.label} on the plot`).toBe(true);
   for (const e of p.site.elements) {
-    expect(overlaps(e, fp), `${e.label} clear of the house`).toBe(false);
+    // Stepped houses leave usable notches, so check against the rooms, not the bounding box.
+    for (const r of p.floors[0].rooms) expect(overlaps(e, r), `${e.label} clear of ${r.label}`).toBe(false);
     expect(inside(e, p.site.plot), `${e.label} on the plot`).toBe(true);
   }
 }

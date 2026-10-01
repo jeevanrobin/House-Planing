@@ -33,6 +33,12 @@ export interface PlotFrame {
   /** Plot boundary in world coordinates. */
   world: Polygon;
   area: number;
+  /**
+   * The drawing is rotated so the road frontage is square to the sheet, as
+   * an architect would orient it. True north points this many degrees
+   * clockwise from "up" on the sheet (0 for plain rectangular plots).
+   */
+  northDeg: number;
 }
 
 export function toWorldPoint(f: PlotFrame, [lx, ly]: [number, number]): [number, number] {
@@ -44,7 +50,7 @@ export function toWorldPoint(f: PlotFrame, [lx, ly]: [number, number]): [number,
   }
 }
 
-function toLocalPoint(f: Omit<PlotFrame, "local" | "world" | "area">, [wx, wy]: [number, number]): [number, number] {
+function toLocalPoint(f: Omit<PlotFrame, "local" | "world" | "area" | "northDeg">, [wx, wy]: [number, number]): [number, number] {
   const x = wx - f.bx;
   const y = wy - f.by;
   switch (f.road) {
@@ -65,23 +71,243 @@ export function toWorldRect(f: PlotFrame, r: Rect): Rect {
  * Build the plot frame. A user polygon arrives in map metres (x = east,
  * y = north); flip y so it matches the drawing frame (y = south).
  */
+const FACING_BEARING: Record<Facing, number> = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+
+/** Compass bearing (0 = N, clockwise) of a vector in y-down coordinates. */
+function bearingOf(vx: number, vy: number): number {
+  return ((Math.atan2(vx, -vy) * 180) / Math.PI + 360) % 360;
+}
+
+/**
+ * Bearing of the road frontage's outward normal.
+ *
+ * 1. A real straight boundary edge facing the road is the strongest cue: the
+ *    house squares up with it. Edges within 50 degrees of the facing qualify;
+ *    the best-aligned wins, and near-ties go to the orientation that leaves
+ *    the plot deeper (narrow plots front the road on their short side).
+ * 2. Blob-like plots drawn with many short edges have no such edge; then the
+ *    plot's principal axis is used, but only when the shape is clearly
+ *    elongated (otherwise the axis is noise and the plot stays unrotated).
+ */
+function frontageBearing(poly: Polygon, facing: Facing): number | null {
+  const n = poly.length;
+  const want = FACING_BEARING[facing];
+  const angDiff = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
+  const cx = poly.reduce((a, q) => a + q[0], 0) / n;
+  const cy = poly.reduce((a, q) => a + q[1], 0) / n;
+  let perimeter = 0;
+  for (let i = 0; i < n; i++) perimeter += Math.hypot(poly[(i + 1) % n][0] - poly[i][0], poly[(i + 1) % n][1] - poly[i][1]);
+  const depthAlong = (nx: number, ny: number) => {
+    const proj = poly.map(([x, y]) => x * nx + y * ny);
+    return Math.max(...proj) - Math.min(...proj);
+  };
+
+  const edges: { bearing: number; diff: number; len: number; depth: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = poly[i];
+    const [bx, by] = poly[(i + 1) % n];
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < Math.max(2, perimeter * 0.1)) continue;
+    let nx = (by - ay) / len;
+    let ny = -(bx - ax) / len;
+    if (nx * ((ax + bx) / 2 - cx) + ny * ((ay + by) / 2 - cy) < 0) { nx = -nx; ny = -ny; }
+    const bearing = bearingOf(nx, ny);
+    const diff = angDiff(bearing, want);
+    if (diff <= 50) edges.push({ bearing, diff, len, depth: depthAlong(nx, ny) });
+  }
+  if (edges.length) {
+    const bestDiff = Math.min(...edges.map((e) => e.diff));
+    const near = edges.filter((e) => e.diff <= bestDiff + 10);
+    near.sort((a, b) => b.depth - a.depth || b.len - a.len);
+    return near[0].bearing;
+  }
+
+  // Blob: principal axis of points sampled along the boundary.
+  const pts: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = poly[i];
+    const [bx, by] = poly[(i + 1) % n];
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.5));
+    for (let k = 0; k < steps; k++) pts.push([ax + ((bx - ax) * k) / steps, ay + ((by - ay) * k) / steps]);
+  }
+  const mx = pts.reduce((a, q) => a + q[0], 0) / pts.length;
+  const my = pts.reduce((a, q) => a + q[1], 0) / pts.length;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const [x, y] of pts) { sxx += (x - mx) ** 2; syy += (y - my) ** 2; sxy += (x - mx) * (y - my); }
+  const tr = sxx + syy;
+  const det = sxx * syy - sxy * sxy;
+  const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - det));
+  const l1 = tr / 2 + disc;
+  const l2 = tr / 2 - disc;
+  if (l2 <= 0 || l1 / l2 < 1.6) return null; // too round to have a meaningful axis
+  const phi = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const major: [number, number] = [Math.cos(phi), Math.sin(phi)];
+  const minor: [number, number] = [-Math.sin(phi), Math.cos(phi)];
+  const cands = [
+    { v: major, short: true }, { v: [-major[0], -major[1]] as [number, number], short: true },
+    { v: minor, short: false }, { v: [-minor[0], -minor[1]] as [number, number], short: false },
+  ].map((c) => ({ ...c, bearing: bearingOf(c.v[0], c.v[1]), diff: angDiff(bearingOf(c.v[0], c.v[1]), want) }));
+  cands.sort((a, b) => (Math.abs(a.diff - b.diff) < 10 ? Number(b.short) - Number(a.short) : a.diff - b.diff));
+  return cands[0].bearing;
+}
+
+const rotate = ([x, y]: [number, number], deg: number): [number, number] => {
+  const t = (deg * Math.PI) / 180;
+  return [x * Math.cos(t) - y * Math.sin(t), x * Math.sin(t) + y * Math.cos(t)];
+};
+
 export function makePlotFrame(req: Requirements): PlotFrame {
-  const road = roadSideOf(req.facing);
   if (req.plotPolygon && req.plotPolygon.length >= 3) {
+    // Map metres are y-north; the drawing frame is y-down.
     const flipped: Polygon = req.plotPolygon.map(([x, y]) => [x, -y]);
-    const bb = polygonBBox(flipped);
-    const world: Polygon = flipped.map(([x, y]) => [x - bb.x, y - bb.y]);
+    // Square the road frontage to the sheet: rotate by the frontage's offset
+    // from the nearest compass direction.
+    const fb = frontageBearing(flipped, req.facing);
+    let delta = 0;
+    let road = roadSideOf(req.facing);
+    if (fb !== null) {
+      const card = Math.round(fb / 90) % 4;
+      road = (["N", "E", "S", "W"] as const)[card];
+      delta = ((fb - card * 90 + 540) % 360) - 180;
+      if (Math.abs(delta) < 1.5) delta = 0;
+    }
+    const turned: Polygon = flipped.map((p) => rotate(p, -delta));
+    const bb = polygonBBox(turned);
+    const world: Polygon = turned.map(([x, y]) => [x - bb.x, y - bb.y]);
     const horizontalRoad = road === "N" || road === "S";
     const base = { road, bx: 0, by: 0, pw: horizontalRoad ? bb.w : bb.h, pd: horizontalRoad ? bb.h : bb.w };
     const local = world.map((p) => toLocalPoint(base, p));
-    return { ...base, local, world, area: polygonArea(world) };
+    return { ...base, local, world, area: polygonArea(world), northDeg: -delta };
   }
+  const road = roadSideOf(req.facing);
   const pw = req.plotWidth;
   const pd = req.plotDepth;
   const local: Polygon = [[0, 0], [pw, 0], [pw, pd], [0, pd]];
-  const frame = { road, bx: 0, by: 0, pw, pd, local, world: [] as Polygon, area: pw * pd };
+  const frame = { road, bx: 0, by: 0, pw, pd, local, world: [] as Polygon, area: pw * pd, northDeg: 0 };
   frame.world = local.map((p) => toWorldPoint(frame, p));
   return frame;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buildable envelope                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The buildable area of a plot (plot-local, road at y = 0), sliced into thin
+ * horizontal rows so the layout can ask how wide the land is between depth
+ * y0 and y1. This is what lets footprints follow the plot's shape.
+ */
+export class Envelope {
+  readonly step = 0.25;
+  readonly y0: number;
+  readonly y1: number;
+  /** Per row: the free x-intervals inside the envelope. */
+  private rows: [number, number][][];
+
+  constructor(poly: Polygon, frontY: number) {
+    const bb = polygonBBox(poly);
+    this.y0 = Math.max(bb.y, frontY);
+    this.y1 = bb.y + bb.h;
+    this.rows = [];
+    for (let y = this.y0; y < this.y1 - 1e-9; y += this.step) {
+      // Narrowest of the row's top and bottom scanlines, so every rectangle
+      // drawn within the row stays inside the polygon.
+      const a = scan(poly, y + 1e-6);
+      const b = scan(poly, Math.min(y + this.step, this.y1) - 1e-6);
+      this.rows.push(intersectIntervals(a, b));
+    }
+  }
+
+  get depth(): number {
+    return this.y1 - this.y0;
+  }
+
+  /** Widest free interval across all rows in [ya, yb] containing `near` (else the widest). */
+  extent(ya: number, yb: number, near?: number): [number, number] | null {
+    const i0 = Math.max(0, Math.floor((ya - this.y0) / this.step + 1e-6));
+    const i1 = Math.min(this.rows.length - 1, Math.ceil((yb - this.y0) / this.step - 1e-6) - 1);
+    if (i1 < i0) return null;
+    let acc: [number, number][] = this.rows[i0];
+    for (let i = i0 + 1; i <= i1 && acc.length; i++) acc = intersectIntervals(acc, this.rows[i]);
+    if (!acc.length) return null;
+    if (near !== undefined) {
+      const hit = acc.find(([a, b]) => near >= a - 1e-6 && near <= b + 1e-6);
+      if (hit) return hit;
+    }
+    return acc.reduce((m, iv) => (iv[1] - iv[0] > m[1] - m[0] ? iv : m));
+  }
+
+  /** First depth (from the front) where the land is at least `minW` wide — skips a narrow tip at the front. */
+  firstWideRow(minW: number): number {
+    const i = this.rows.findIndex((row) => row.some(([a, b]) => b - a >= minW - 1e-6));
+    return i < 0 ? this.y0 : this.y0 + i * this.step;
+  }
+
+  /**
+   * How deep the house can go from y0 while every row still offers a free
+   * interval at least `minW` wide (a sliver in a corner isn't buildable depth).
+   */
+  usableDepth(y0: number, minW: number): number {
+    const i0 = Math.max(0, Math.floor((y0 - this.y0) / this.step + 1e-6));
+    let i = i0;
+    while (i < this.rows.length && this.rows[i].some(([a, b]) => b - a >= minW - 1e-6)) i++;
+    return Math.max(0, this.y0 + i * this.step - y0);
+  }
+
+  /** Buildable area (m²). */
+  area(): number {
+    return this.rows.reduce((a, row) => a + row.reduce((s, [x0, x1]) => s + (x1 - x0), 0), 0) * this.step;
+  }
+
+  /** Widest row anywhere (for sizing searches). */
+  maxWidth(): number {
+    return Math.max(0, ...this.rows.flat().map(([a, b]) => b - a));
+  }
+
+  /** A central x to anchor the house on (middle of the widest row). */
+  center(): number {
+    let best: [number, number] = [0, 0];
+    for (const row of this.rows) for (const iv of row) if (iv[1] - iv[0] > best[1] - best[0]) best = iv;
+    return (best[0] + best[1]) / 2;
+  }
+}
+
+/** x-intervals where a horizontal line at y is inside the polygon. */
+function scan(poly: Polygon, y: number): [number, number][] {
+  const xs: number[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const [ax, ay] = poly[i];
+    const [bx, by] = poly[(i + 1) % poly.length];
+    if ((ay <= y && by > y) || (by <= y && ay > y)) xs.push(ax + ((y - ay) / (by - ay)) * (bx - ax));
+  }
+  xs.sort((a, b) => a - b);
+  const out: [number, number][] = [];
+  for (let i = 0; i + 1 < xs.length; i += 2) out.push([xs[i], xs[i + 1]]);
+  return out;
+}
+
+function intersectIntervals(a: [number, number][], b: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a0, a1] of a) {
+    for (const [b0, b1] of b) {
+      const lo = Math.max(a0, b0);
+      const hi = Math.min(a1, b1);
+      if (hi - lo > 0.05) out.push([lo, hi]);
+    }
+  }
+  return out;
+}
+
+/** Buildable envelope (plot-local): the plot inset by the side setback, behind the front setback. */
+export function buildableEnvelope(frame: PlotFrame, sb: Setbacks): Envelope {
+  const rectPlot = frame.local.length === 4 && Math.abs(polygonArea(frame.local) - frame.pw * frame.pd) < 1e-6;
+  if (rectPlot) {
+    const r = buildableRect(frame, sb);
+    return new Envelope([[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]], r.y);
+  }
+  const inset = insetPolygon(frame.local, sb.side);
+  const poly = inset.length >= 3 ? inset : frame.local;
+  return new Envelope(poly, polygonBBox(frame.local).y + sb.front);
 }
 
 export interface Setbacks {
@@ -168,13 +394,19 @@ export interface SiteLayout {
  * Place parking, pool and garden around a house that occupies `house`
  * (plot-local). Elements never overlap the house or each other.
  */
-export function planSite(frame: PlotFrame, house: Rect, req: Requirements, sb: Setbacks): SiteLayout {
+/**
+ * `thorough` enables the whole-plot free-space search (needed for irregular
+ * plots); it's skipped while scoring candidate widths, where speed matters.
+ */
+export function planSite(frame: PlotFrame, house: Rect, req: Requirements, sb: Setbacks, blocks: Rect[] = [house], thorough = true): SiteLayout {
   const elements: SiteElement[] = [];
   const warnings: string[] = [];
   const margin = 0.4;
   const inside = (r: Rect) => rectInside(r, frame.local);
+  // `house` is the footprint's bounding box (for yard positions); `blocks` are
+  // the actual footprint rectangles, so a stepped house leaves usable notches.
   const free = (r: Rect) =>
-    inside(r) && ![house, ...elements].some((o) =>
+    inside(r) && ![...blocks, ...elements].some((o) =>
       r.x < o.x + o.w - 1e-6 && o.x < r.x + r.w - 1e-6 && r.y < o.y + o.h - 1e-6 && o.y < r.y + r.h - 1e-6);
 
   // Parking: cars side by side in the front yard, nose towards the house.
@@ -233,7 +465,20 @@ export function planSite(frame: PlotFrame, house: Rect, req: Requirements, sb: S
     const spot = candidates
       .map((c) => ({ ...c, x: Math.min(Math.max(c.x, margin), frame.pw - margin - c.w) }))
       .find(free);
-    if (spot) elements.push({ ...spot, id: "pool", type: "pool", label: "Swimming Pool" });
+    let place = spot;
+    if (!place) {
+      // Irregular plots: the largest open rectangle anywhere on the land.
+      const open = thorough ? largestFreeRect(frame.local, [...blocks, ...elements], 1.5) : null;
+      if (open) {
+        for (const [w, h] of [[pl, pwid], [pwid, pl]]) {
+          if (open.w >= w && open.h >= h) {
+            place = { x: open.x + (open.w - w) / 2, y: open.y + (open.h - h) / 2, w, h };
+            break;
+          }
+        }
+      }
+    }
+    if (place) elements.push({ ...place, id: "pool", type: "pool", label: "Swimming Pool" });
     else warnings.push("The swimming pool doesn't fit in the open yards of this plot.");
   }
 
@@ -254,11 +499,14 @@ export function planSite(frame: PlotFrame, house: Rect, req: Requirements, sb: S
     }
     yards.push({ x: margin, y: house.y, w: house.x - 2 * margin, h: house.h });
     yards.push({ x: house.x + house.w + margin, y: house.y, w: frame.pw - house.x - house.w - 2 * margin, h: house.h });
-    const best = yards
+    let best = yards
       .filter((y) => y.w >= 2 && y.h >= 2)
       .map((y) => shrinkToFree(y, free))
       .filter((y): y is Rect => !!y)
       .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+    // Irregular plots: the largest open rectangle of land, if bigger.
+    const open = thorough ? largestFreeRect(frame.local, [...blocks, ...elements], 0.6) : null;
+    if (open && free(open) && (!best || open.w * open.h > best.w * best.h)) best = open;
     if (best && best.w * best.h >= 8) {
       elements.push({ ...best, id: "garden", type: "garden", label: "Garden" });
     } else {
@@ -268,6 +516,50 @@ export function planSite(frame: PlotFrame, house: Rect, req: Requirements, sb: S
 
   void sb;
   return { elements, warnings };
+}
+
+/**
+ * Largest axis-aligned rectangle of open land: inside the plot, at least
+ * `gap` metres clear of every block (house, pool, cars). Grid-based, so it
+ * works for any plot shape.
+ */
+export function largestFreeRect(poly: Polygon, blocks: Rect[], gap = 0.6): Rect | null {
+  const bb = polygonBBox(poly);
+  const step = Math.max(0.25, Math.max(bb.w, bb.h) / 160);
+  const cols = Math.max(1, Math.floor(bb.w / step));
+  const rows = Math.max(1, Math.floor(bb.h / step));
+  const heights = new Array<number>(cols).fill(0);
+  let best = { area: 0, x: 0, y: 0, w: 0, h: 0 };
+  const blocked = (x: number, y: number) =>
+    blocks.some((b) => x > b.x - gap && x < b.x + b.w + gap && y > b.y - gap && y < b.y + b.h + gap);
+  for (let r = 0; r < rows; r++) {
+    const y0 = bb.y + r * step;
+    for (let c = 0; c < cols; c++) {
+      const x0 = bb.x + c * step;
+      // A cell counts only if all four corners are inside the plot and clear.
+      const ok = ([[x0, y0], [x0 + step, y0], [x0, y0 + step], [x0 + step, y0 + step]] as [number, number][])
+        .every(([x, y]) => pointInPolygon([x, y], poly) && !blocked(x, y));
+      heights[c] = ok ? heights[c] + 1 : 0;
+    }
+    const stack: number[] = [];
+    for (let c = 0; c <= cols; c++) {
+      const h = c === cols ? 0 : heights[c];
+      while (stack.length && heights[stack[stack.length - 1]] >= h) {
+        const top = stack.pop()!;
+        const height = heights[top];
+        const left = stack.length ? stack[stack.length - 1] + 1 : 0;
+        const width = c - left;
+        // Prefer usable proportions: area, discounted for very thin strips.
+        const w = width * step;
+        const hh = height * step;
+        const score = w * hh * Math.min(1, Math.min(w, hh) / 3);
+        if (score > best.area) best = { area: score, x: left, y: r - height + 1, w: width, h: height };
+      }
+      stack.push(c);
+    }
+  }
+  if (!best.area) return null;
+  return { x: bb.x + best.x * step, y: bb.y + best.y * step, w: best.w * step, h: best.h * step };
 }
 
 /** Shrink a candidate rectangle until it no longer collides (simple inset search). */

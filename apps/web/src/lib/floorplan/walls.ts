@@ -1,4 +1,4 @@
-import type { Rect, Room, RoomType, Wall } from "./types";
+import type { Room, RoomType, Wall } from "./types";
 
 const EPS = 0.04;
 // Real-world thicknesses in metres: 230 mm brick outer walls, 115 mm partitions.
@@ -7,9 +7,9 @@ export const INTERIOR_T = 0.115;
 export const RAILING_T = 0.06;
 
 /** Rooms open to the air: their outer edges get a railing, not a wall. */
-const OPEN: RoomType[] = ["sitout", "balcony", "terrace", "parking"];
+export const OPEN: RoomType[] = ["sitout", "balcony", "terrace", "parking"];
 
-interface Interval {
+export interface Interval {
   a: number;
   b: number;
 }
@@ -18,16 +18,8 @@ function keyOf(v: number) {
   return Math.round(v * 100) / 100;
 }
 
-function push(map: Map<number, Interval[]>, coord: number, a: number, b: number) {
-  const k = keyOf(coord);
-  const lo = Math.min(a, b);
-  const hi = Math.max(a, b);
-  if (hi - lo < EPS) return;
-  (map.get(k) ?? map.set(k, []).get(k)!).push({ a: lo, b: hi });
-}
-
 /** Merge overlapping / touching intervals on a single line. */
-function merge(list: Interval[]): Interval[] {
+export function merge(list: Interval[]): Interval[] {
   if (list.length === 0) return [];
   const sorted = [...list].sort((x, y) => x.a - y.a);
   const out: Interval[] = [{ ...sorted[0] }];
@@ -43,7 +35,7 @@ function merge(list: Interval[]): Interval[] {
 }
 
 /** `list` minus every interval in `cut`. */
-function subtract(list: Interval[], cut: Interval[]): Interval[] {
+export function subtract(list: Interval[], cut: Interval[]): Interval[] {
   let out = list;
   for (const c of cut) {
     out = out.flatMap((iv) => {
@@ -54,56 +46,102 @@ function subtract(list: Interval[], cut: Interval[]): Interval[] {
       return parts;
     });
   }
-  return out;
+  return out.filter((iv) => iv.b - iv.a > EPS);
+}
+
+/** Overlap of two merged interval lists. */
+export function intersect(a: Interval[], b: Interval[]): Interval[] {
+  const out: Interval[] = [];
+  for (const x of a) {
+    for (const y of b) {
+      const lo = Math.max(x.a, y.a);
+      const hi = Math.min(x.b, y.b);
+      if (hi - lo > EPS) out.push({ a: lo, b: hi });
+    }
+  }
+  return merge(out);
 }
 
 /**
- * Build the wall network for rooms that tile a footprint. Shared edges
- * collapse into one partition; edges on the footprint boundary become outer
- * walls, except along open-air rooms (sit-out, balcony, terrace), which get a
- * railing.
+ * Every wall line, with the room coverage on each side. For a vertical line
+ * at x, "low" is the side with smaller x (rooms whose right edge is on it).
  */
-export function generateWalls(rooms: Room[], fp: Rect): Wall[] {
-  const lines = { v: new Map<number, Interval[]>(), h: new Map<number, Interval[]>() };
-  const open = { v: new Map<number, Interval[]>(), h: new Map<number, Interval[]>() };
+interface Line {
+  lowSolid: Interval[];
+  lowOpen: Interval[];
+  highSolid: Interval[];
+  highOpen: Interval[];
+}
 
+function collect(rooms: Room[]) {
+  const lines = { v: new Map<number, Line>(), h: new Map<number, Line>() };
+  const get = (o: "v" | "h", at: number) => {
+    const k = keyOf(at);
+    let l = lines[o].get(k);
+    if (!l) { l = { lowSolid: [], lowOpen: [], highSolid: [], highOpen: [] }; lines[o].set(k, l); }
+    return l;
+  };
   for (const r of rooms) {
-    const target = OPEN.includes(r.type) ? open : lines;
-    const edges: ["v" | "h", number, number, number][] = [
-      ["v", r.x, r.y, r.y + r.h],
-      ["v", r.x + r.w, r.y, r.y + r.h],
-      ["h", r.y, r.x, r.x + r.w],
-      ["h", r.y + r.h, r.x, r.x + r.w],
-    ];
-    for (const [o, at, a, b] of edges) {
-      const onBoundary = o === "v"
-        ? Math.abs(at - fp.x) < EPS || Math.abs(at - (fp.x + fp.w)) < EPS
-        : Math.abs(at - fp.y) < EPS || Math.abs(at - (fp.y + fp.h)) < EPS;
-      // Open rooms only contribute railings on the boundary; their inner
-      // edges are walls of the neighbouring indoor rooms.
-      if (target === open && !onBoundary) continue;
-      push(target[o], at, a, b);
-    }
+    const open = OPEN.includes(r.type);
+    const add = (o: "v" | "h", at: number, side: "low" | "high", a: number, b: number) => {
+      if (b - a < EPS) return;
+      const l = get(o, at);
+      (side === "low" ? (open ? l.lowOpen : l.lowSolid) : (open ? l.highOpen : l.highSolid)).push({ a, b });
+    };
+    add("v", r.x, "high", r.y, r.y + r.h);
+    add("v", r.x + r.w, "low", r.y, r.y + r.h);
+    add("h", r.y, "high", r.x, r.x + r.w);
+    add("h", r.y + r.h, "low", r.x, r.x + r.w);
   }
+  return lines;
+}
 
+/**
+ * Build the wall network for rooms that tile a footprint of any (stepped)
+ * outline. Each stretch of a wall line is classified by what lies on its two
+ * sides: room | room → partition; room | nothing → outer wall; open room
+ * (sit-out, balcony…) | nothing → railing; room | open room → outer wall
+ * (the facade facing the sit-out); open | open → nothing.
+ */
+export function generateWalls(rooms: Room[]): Wall[] {
   const walls: Wall[] = [];
-  const isExt = (o: "v" | "h", v: number) =>
-    o === "v"
-      ? Math.abs(v - fp.x) < EPS || Math.abs(v - (fp.x + fp.w)) < EPS
-      : Math.abs(v - fp.y) < EPS || Math.abs(v - (fp.y + fp.h)) < EPS;
-
+  const lines = collect(rooms);
   for (const o of ["v", "h"] as const) {
-    for (const [at, list] of lines[o]) {
-      // Boundary stretches along open rooms are railings, not walls.
-      const merged = subtract(merge(list), isExt(o, at) ? merge(open[o].get(at) ?? []) : []);
-      for (const iv of merged) walls.push(wall(o, at, iv, isExt(o, at) ? "exterior" : "interior"));
-    }
-    for (const [at, list] of open[o]) {
-      const solid = merge(lines[o].get(at) ?? []);
-      for (const iv of subtract(merge(list), solid)) walls.push(wall(o, at, iv, "railing"));
+    for (const [at, l] of lines[o]) {
+      const lowS = merge(l.lowSolid);
+      const lowO = merge(l.lowOpen);
+      const highS = merge(l.highSolid);
+      const highO = merge(l.highOpen);
+      const low = merge([...lowS, ...lowO]);
+      const high = merge([...highS, ...highO]);
+      for (const iv of intersect(lowS, highS)) walls.push(wall(o, at, iv, "interior"));
+      for (const iv of merge([...intersect(lowS, highO), ...intersect(lowO, highS)])) walls.push(wall(o, at, iv, "exterior"));
+      for (const iv of merge([...subtract(lowS, high), ...subtract(highS, low)])) walls.push(wall(o, at, iv, "exterior"));
+      for (const iv of merge([...subtract(lowO, high), ...subtract(highO, low)])) walls.push(wall(o, at, iv, "railing"));
     }
   }
   return walls;
+}
+
+/**
+ * Stretches of a room's edges with nothing on the other side (the house's
+ * outer skin), per side. Used for windows, entrances and daylight checks.
+ */
+export function exteriorEdges(r: Room, rooms: Room[]): { side: "top" | "bottom" | "left" | "right"; iv: Interval }[] {
+  const out: { side: "top" | "bottom" | "left" | "right"; iv: Interval }[] = [];
+  const others = rooms.filter((o) => o.id !== r.id);
+  const near = (a: number, b: number) => Math.abs(a - b) < EPS;
+  const cover = (pred: (o: Room) => boolean, span: (o: Room) => Interval) => merge(others.filter(pred).map(span));
+  const sides: ["top" | "bottom" | "left" | "right", Interval, Interval[]][] = [
+    ["top", { a: r.x, b: r.x + r.w }, cover((o) => near(o.y + o.h, r.y), (o) => ({ a: o.x, b: o.x + o.w }))],
+    ["bottom", { a: r.x, b: r.x + r.w }, cover((o) => near(o.y, r.y + r.h), (o) => ({ a: o.x, b: o.x + o.w }))],
+    ["left", { a: r.y, b: r.y + r.h }, cover((o) => near(o.x + o.w, r.x), (o) => ({ a: o.y, b: o.y + o.h }))],
+    ["right", { a: r.y, b: r.y + r.h }, cover((o) => near(o.x, r.x + r.w), (o) => ({ a: o.y, b: o.y + o.h }))],
+  ];
+  for (const [side, edge, covered] of sides) {
+    for (const iv of subtract([edge], covered)) out.push({ side, iv });
+  }
+  return out;
 }
 
 function wall(o: "v" | "h", at: number, iv: Interval, type: Wall["type"]): Wall {
