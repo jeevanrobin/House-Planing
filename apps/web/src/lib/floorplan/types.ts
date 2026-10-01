@@ -44,6 +44,12 @@ export interface Requirements {
   /** Optional polygon boundary in local metres. When present the engine
    *  uses this as the true plot shape instead of the plotWidth×plotDepth rect. */
   plotPolygon?: Polygon;
+  /**
+   * "max": the house grows towards ~60% ground coverage and follows the
+   * plot's shape; "balanced": a compact house with garden around it.
+   * Defaults to "max" for map-drawn plots, "balanced" otherwise.
+   */
+  plotUse?: "balanced" | "max";
 
   // Step 2
   bedrooms: number;
@@ -153,8 +159,12 @@ export interface SitePlan {
   plot: Polygon;
   /** Area inside the setbacks where building is allowed. */
   buildable: Rect;
+  /** The setback line, following the plot's shape (world metres). */
+  setbackLine?: Polygon;
   /** Which plot edge faces the road. */
   roadSide: "N" | "E" | "S" | "W";
+  /** The sheet is turned to square the road frontage; true north is this many degrees clockwise from up. */
+  northDeg: number;
   elements: SiteElement[];
 }
 

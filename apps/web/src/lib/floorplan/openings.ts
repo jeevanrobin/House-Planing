@@ -6,6 +6,7 @@
  * go on exterior walls of habitable and wet rooms.
  */
 import type { Door, Rect, Room, RoomType, WindowMark } from "./types";
+import { exteriorEdges } from "./walls";
 
 const EPS = 0.02;
 
@@ -92,17 +93,19 @@ function doorWidth(type: RoomType, kind: Door["kind"], len: number): number {
   return WET.includes(type) || type === "dress" || type === "store" ? 0.75 : 0.9;
 }
 
-/** Wall of the footprint that faces the road. */
-function roadEdge(fp: Rect, road: "N" | "E" | "S" | "W"): Shared {
-  switch (road) {
-    case "N": return { orientation: "h", at: fp.y, lo: fp.x, hi: fp.x + fp.w };
-    case "S": return { orientation: "h", at: fp.y + fp.h, lo: fp.x, hi: fp.x + fp.w };
-    case "W": return { orientation: "v", at: fp.x, lo: fp.y, hi: fp.y + fp.h };
-    case "E": return { orientation: "v", at: fp.x + fp.w, lo: fp.y, hi: fp.y + fp.h };
+/** Which side of a room faces the road, in the drawing frame. */
+const ROAD_SIDE = { N: "top", S: "bottom", W: "left", E: "right" } as const;
+
+function edgeAsShared(r: Rect, side: "top" | "bottom" | "left" | "right", iv: { a: number; b: number }): Shared {
+  switch (side) {
+    case "top": return { orientation: "h", at: r.y, lo: iv.a, hi: iv.b };
+    case "bottom": return { orientation: "h", at: r.y + r.h, lo: iv.a, hi: iv.b };
+    case "left": return { orientation: "v", at: r.x, lo: iv.a, hi: iv.b };
+    case "right": return { orientation: "v", at: r.x + r.w, lo: iv.a, hi: iv.b };
   }
 }
 
-export function placeOpenings(rooms: Room[], fp: Rect, road: "N" | "E" | "S" | "W" = "N"): { doors: Door[]; windows: WindowMark[] } {
+export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | "W" = "N"): { doors: Door[]; windows: WindowMark[] } {
   const doors: Door[] = [];
   const windows: WindowMark[] = [];
   const byId = new Map(rooms.map((r) => [r.id, r]));
@@ -136,16 +139,14 @@ export function placeOpenings(rooms: Room[], fp: Rect, road: "N" | "E" | "S" | "
         const d = makeDoor(r, sit.o, sit.s, "main", 1.1);
         if (d) { doors.push(d); link(r, sit.o); }
       } else {
-        // No sit-out: main door on the wall facing the road.
-        const edge = roadEdge(fp, road);
-        const onEdge = edge.orientation === "h"
-          ? Math.abs(r.y - edge.at) < EPS || Math.abs(r.y + r.h - edge.at) < EPS
-          : Math.abs(r.x - edge.at) < EPS || Math.abs(r.x + r.w - edge.at) < EPS;
-        if (onEdge) {
-          const lo = edge.orientation === "h" ? r.x : r.y;
-          const hi = edge.orientation === "h" ? r.x + r.w : r.y + r.h;
-          const d = makeDoor(r, r, { ...edge, lo, hi }, "main", 1.1);
-          if (d) doors.push(d);
+        // No sit-out: main door on an outside wall facing the road
+        // (any outside wall as a fallback, e.g. on a stepped facade).
+        const facing = ROAD_SIDE[road];
+        const ext = exteriorEdges(r, rooms).sort((a, b) =>
+          Number(b.side === facing) - Number(a.side === facing) || (b.iv.b - b.iv.a) - (a.iv.b - a.iv.a));
+        for (const e of ext) {
+          const d = makeDoor(r, r, edgeAsShared(r, e.side, e.iv), "main", 1.1);
+          if (d) { doors.push(d); break; }
         }
       }
     }
@@ -223,17 +224,12 @@ export function placeOpenings(rooms: Room[], fp: Rect, road: "N" | "E" | "S" | "
     }
   }
 
-  // Windows on exterior walls.
-  const right = fp.x + fp.w;
-  const bottom = fp.y + fp.h;
+  // Windows on outside walls — any stretch with nothing on the other side,
+  // so stepped and angled facades get windows too.
   for (const r of rooms) {
     if (!WINDOWED.includes(r.type)) continue;
     const small = WET.includes(r.type);
-    const edges: Shared[] = [];
-    if (Math.abs(r.x - fp.x) < EPS) edges.push({ orientation: "v", at: r.x, lo: r.y, hi: r.y + r.h });
-    if (Math.abs(r.x + r.w - right) < EPS) edges.push({ orientation: "v", at: r.x + r.w, lo: r.y, hi: r.y + r.h });
-    if (Math.abs(r.y - fp.y) < EPS) edges.push({ orientation: "h", at: r.y, lo: r.x, hi: r.x + r.w });
-    if (Math.abs(r.y + r.h - bottom) < EPS) edges.push({ orientation: "h", at: r.y + r.h, lo: r.x, hi: r.x + r.w });
+    const edges: Shared[] = exteriorEdges(r, rooms).map((e) => edgeAsShared(r, e.side, e.iv));
     for (const e of edges) {
       const len = e.hi - e.lo;
       if (len < (small ? 0.9 : 1.4)) continue;

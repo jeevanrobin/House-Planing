@@ -161,7 +161,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
 
   // Walls, doors and windows derive from the rooms, so edits stay consistent.
   const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide), [rooms, fp, floor.roadSide]);
-  const walls = React.useMemo(() => generateWalls(rooms, fp), [rooms, fp]);
+  const walls = React.useMemo(() => generateWalls(rooms), [rooms]);
   const furniture = React.useMemo(
     () => rooms.flatMap((r) => furnish(r, openings.doors, openings.windows)),
     [rooms, openings],
@@ -236,6 +236,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
     commit(rooms.map((r) => (r.id === id ? { ...r, type, label: labelFor(type) } : r)));
 
   const sel = rooms.find((r) => r.id === selected) ?? null;
+  const landscaped = isGround && site.elements.some((e) => e.type === "garden");
   const roadMid = roadLabelPos(site, vb);
 
   return (
@@ -291,12 +292,15 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={C.paper} />
 
           {/* Plot, setback line and road */}
-          <polygon points={pts(site.plot)} fill={C.ground} stroke={C.plotLine} strokeWidth={0.06 * s}
+          <polygon points={pts(site.plot)} fill={landscaped ? "url(#fp-grass)" : C.ground} stroke={C.plotLine} strokeWidth={0.06 * s}
             strokeDasharray={`${0.9 * s} ${0.25 * s} ${0.15 * s} ${0.25 * s}`} />
-          {isGround && (
+          {isGround && (site.setbackLine && site.setbackLine.length >= 3 ? (
+            <polygon points={pts(site.setbackLine)} fill="none" stroke={C.setback} strokeWidth={0.035 * s}
+              strokeDasharray={`${0.3 * s} ${0.2 * s}`} />
+          ) : (
             <rect x={site.buildable.x} y={site.buildable.y} width={site.buildable.w} height={site.buildable.h}
               fill="none" stroke={C.setback} strokeWidth={0.035 * s} strokeDasharray={`${0.3 * s} ${0.2 * s}`} />
-          )}
+          ))}
           <text x={roadMid.x} y={roadMid.y} textAnchor="middle" dominantBaseline="middle"
             transform={roadMid.rotate ? `rotate(-90 ${roadMid.x} ${roadMid.y})` : undefined}
             fill={C.inkFaint} style={{ fontSize: 0.42 * s, fontWeight: 700, letterSpacing: 0.25 * s }}>
@@ -321,7 +325,9 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           </g>
 
           {/* House shadow */}
-          <rect x={fp.x + 0.12} y={fp.y + 0.18} width={fp.w} height={fp.h} fill={C.shadow} />
+          {floor.footprintPolygon && floor.footprintPolygon.length >= 3
+            ? <polygon points={pts(floor.footprintPolygon)} transform="translate(0.12 0.18)" fill={C.shadow} />
+            : <rect x={fp.x + 0.12} y={fp.y + 0.18} width={fp.w} height={fp.h} fill={C.shadow} />}
 
           {/* Room floors */}
           {rooms.map((r) => {
@@ -419,7 +425,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           )}
 
           {/* North arrow (north is always up) and scale bar */}
-          <g transform={`translate(${vb.x + vb.w - 1.3 * s} ${vb.y + 1.4 * s}) scale(${s})`} pointerEvents="none">
+          <g transform={`translate(${vb.x + vb.w - 1.3 * s} ${vb.y + 1.4 * s}) scale(${s}) rotate(${site.northDeg ?? 0})`} pointerEvents="none">
             <circle r={0.75} fill={C.sheet} stroke={C.inkFaint} strokeWidth={0.05} />
             <path d="M 0 -0.58 L 0.24 0.3 L 0 0.12 L -0.24 0.3 Z" fill={C.ink} />
             <text y={-0.9} textAnchor="middle" style={{ fontSize: 0.36, fontWeight: 800 }} fill={C.ink}>N</text>
