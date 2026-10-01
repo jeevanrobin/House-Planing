@@ -7,7 +7,14 @@ import {
   Sparkles, CheckCircle2, AlertTriangle, Info,
   MapPin, PencilRuler, ArrowLeft,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { RequirementWizard } from "@/components/planner/wizard";
+
+// three.js is heavy: load the 3D view only when it's opened, and only in the browser.
+const Plan3D = dynamic(() => import("@/components/planner/plan-3d").then((m) => m.Plan3D), {
+  ssr: false,
+  loading: () => <div className="flex aspect-[16/10] items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">Building the 3D model…</div>,
+});
 import { FloorPlanCanvas, PlanLegend } from "@/components/planner/floor-plan-canvas";
 import { PlotSelector } from "@/components/plot/plot-selector";
 import { SiteHeader } from "@/components/site-header";
@@ -34,7 +41,7 @@ export default function PlannerPage() {
   const [plan, setPlan] = React.useState<PlanResult | null>(null);
   const [active, setActive] = React.useState(0);
   const [editable, setEditable] = React.useState(false);
-  const [view, setView] = React.useState<"plan" | "site">("plan");
+  const [view, setView] = React.useState<"plan" | "site" | "3d">("plan");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
   const [projectId, setProjectId] = React.useState<string | undefined>();
@@ -231,7 +238,7 @@ export default function PlannerPage() {
             {/* Plan area */}
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2">
+                <div className={`flex flex-wrap gap-2 ${view === "3d" ? "invisible" : ""}`}>
                   {plan.floors.map((f, i) => (
                     <button key={f.floor} onClick={() => setActive(i)}
                       className={`rounded-xl border px-4 py-2 text-sm font-medium transition-all ${
@@ -243,28 +250,33 @@ export default function PlannerPage() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <div className="flex rounded-xl border p-0.5">
-                    {(["plan", "site"] as const).map((v) => (
-                      <button key={v} onClick={() => setView(v)}
+                    {(["plan", "site", "3d"] as const).map((v) => (
+                      <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
                         className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${view === v ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-                        {v === "plan" ? "Floor plan" : "Site plan"}
+                        {v === "plan" ? "Floor plan" : v === "site" ? "Site plan" : "3D"}
                       </button>
                     ))}
                   </div>
-                  <Button size="sm" variant={editable ? "default" : "outline"} onClick={() => setEditable((e) => !e)}>
-                    <Pencil /> {editable ? "Editing" : "Edit"}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => { const s = getSVG(); if (s) exportSVG(s, `floor-${active}`); }}>
-                    <FileCode2 /> SVG
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => { const s = getSVG(); if (s) exportPNG(s, `floor-${active}`); }}>
-                    <FileImage /> PNG
-                  </Button>
+                  {view !== "3d" && (
+                    <>
+                      <Button size="sm" variant={editable ? "default" : "outline"} onClick={() => setEditable((e) => !e)}>
+                        <Pencil /> {editable ? "Editing" : "Edit"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => { const s = getSVG(); if (s) exportSVG(s, `floor-${active}`); }}>
+                        <FileCode2 /> SVG
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => { const s = getSVG(); if (s) exportPNG(s, `floor-${active}`); }}>
+                        <FileImage /> PNG
+                      </Button>
+                    </>
+                  )}
                   <Button size="sm" variant="ghost" onClick={restart}>
                     <RotateCcw /> New
                   </Button>
                 </div>
               </div>
 
+              {view === "3d" ? <Plan3D plan={plan} /> : (
               <div ref={canvasWrap}>
                 <FloorPlanCanvas
                   key={`${active}-${editable}`}
@@ -279,8 +291,9 @@ export default function PlannerPage() {
                   editable={editable}
                 />
               </div>
+              )}
 
-              <PlanLegend />
+              {view !== "3d" && <PlanLegend />}
             </div>
 
             {/* Sidebar */}

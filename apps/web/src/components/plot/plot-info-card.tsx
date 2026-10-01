@@ -12,7 +12,7 @@ const fmt = (n: number, d = 0) =>
   new Intl.NumberFormat("en-IN", { maximumFractionDigits: d }).format(n);
 
 function Stat({ icon: Icon, label, value, sub }: {
-  icon: React.ElementType; label: string; value: string; sub?: string;
+  icon: React.ComponentType<{ className?: string }>; label: string; value: string; sub?: string;
 }) {
   return (
     <div className="rounded-xl border bg-card/50 p-3">
