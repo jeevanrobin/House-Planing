@@ -10,10 +10,14 @@ import { cn } from "@/lib/utils";
 const FACINGS: Facing[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const STEPS = ["Plot & Floors", "Rooms", "Lifestyle", "Style & Budget"];
 
+const FT = 0.3048;
+/** Common Indian plot sizes in feet (width along the road × depth). */
+const PRESETS: [number, number][] = [[20, 30], [20, 40], [25, 50], [30, 40], [30, 50], [40, 60], [50, 80]];
+
 const DEFAULTS: Requirements = {
-  plotWidth: 12,
-  plotDepth: 18,
-  facing: "N",
+  plotWidth: 30 * FT,
+  plotDepth: 50 * FT,
+  facing: "E",
   floors: 2,
   bedrooms: 3,
   bathrooms: 3,
@@ -112,6 +116,11 @@ export function RequirementWizard({
   const set = <K extends keyof Requirements>(k: K, v: Requirements[K]) =>
     setReq((r) => ({ ...r, [k]: v }));
 
+  const [unit, setUnit] = React.useState<"ft" | "m">("ft");
+  const toUnit = (m: number) => Math.round((unit === "ft" ? m / FT : m) * 10) / 10;
+  const fromUnit = (v: number) => (unit === "ft" ? v * FT : v);
+  const sameFt = (a: number, b: number) => Math.abs(a / FT - b) < 0.05;
+
   const next = () => (step < 3 ? setStep((s) => s + 1) : onComplete(req));
   const back = () => setStep((s) => Math.max(0, s - 1));
 
@@ -146,21 +155,47 @@ export function RequirementWizard({
         >
           {step === 0 && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Plot width (m)">
-                  <input type="number" value={req.plotWidth} min={3} max={100}
-                    onChange={(e) => set("plotWidth", Number(e.target.value))}
-                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm" />
+              {!req.plotPolygon && (
+                <Field label="Standard plot sizes (ft)">
+                  <div className="flex flex-wrap gap-2">
+                    {PRESETS.map(([w, d]) => {
+                      const active = sameFt(req.plotWidth, w) && sameFt(req.plotDepth, d);
+                      return (
+                        <button key={`${w}x${d}`} type="button" aria-pressed={active}
+                          onClick={() => setReq((r) => ({ ...r, plotWidth: w * FT, plotDepth: d * FT }))}
+                          className={cn("rounded-md border px-3 py-1.5 font-mono text-sm tabular-nums transition-colors",
+                            active ? "border-primary bg-accent text-accent-foreground" : "hover:bg-secondary/60")}>
+                          {w}×{d}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </Field>
-                <Field label="Plot depth (m)">
-                  <input type="number" value={req.plotDepth} min={3} max={100}
-                    onChange={(e) => set("plotDepth", Number(e.target.value))}
-                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm" />
+              )}
+              <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
+                <Field label={`Width along the road (${unit})`}>
+                  <input type="number" value={toUnit(req.plotWidth)} min={unit === "ft" ? 10 : 3} max={unit === "ft" ? 330 : 100}
+                    onChange={(e) => set("plotWidth", fromUnit(Number(e.target.value)))}
+                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm tabular-nums" />
                 </Field>
+                <Field label={`Depth (${unit})`}>
+                  <input type="number" value={toUnit(req.plotDepth)} min={unit === "ft" ? 10 : 3} max={unit === "ft" ? 330 : 100}
+                    onChange={(e) => set("plotDepth", fromUnit(Number(e.target.value)))}
+                    className="w-full rounded-md border bg-background px-3 py-2.5 text-sm tabular-nums" />
+                </Field>
+                <div role="group" aria-label="Units" className="flex rounded-md border p-0.5">
+                  {(["ft", "m"] as const).map((u) => (
+                    <button key={u} type="button" onClick={() => setUnit(u)} aria-pressed={unit === u}
+                      className={cn("rounded px-3 py-2 text-sm font-medium", unit === u ? "bg-accent text-accent-foreground" : "text-muted-foreground")}>
+                      {u}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-                Plot area ≈ <b className="text-foreground">{(req.plotWidth * req.plotDepth).toFixed(0)} m²</b>
-                {" "}({(req.plotWidth * req.plotDepth * 10.7639).toFixed(0)} ft²)
+                Plot area ≈ <b className="text-foreground">{Math.round(req.plotWidth * req.plotDepth * 10.7639).toLocaleString("en-IN")} sq ft</b>
+                {" "}· {Math.round(req.plotWidth * req.plotDepth * 1.19599).toLocaleString("en-IN")} sq yd
+                {" "}· {Math.round(req.plotWidth * req.plotDepth)} m²
               </div>
               <Field label="Facing direction">
                 <Segmented value={req.facing} onChange={(v) => set("facing", v)}

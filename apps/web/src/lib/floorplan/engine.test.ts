@@ -177,14 +177,28 @@ describe("realistic layouts", () => {
     expect(json.walls.length).toBeGreaterThan(5);
   });
 
-  it("handles map-drawn polygon plots (north is up)", () => {
-    // Map polygons are y-north; a trapezoid narrowing to the north.
+  it("handles map-drawn polygon plots, drawn with the road along the bottom", () => {
+    // Map polygons are y-north; a trapezoid narrowing to the north, where the road is.
     const p = generatePlan({ ...base, plotWidth: 14, plotDepth: 20, plotPolygon: [[0, 0], [14, 0], [12, 20], [2, 20]] });
     expectWellFormed(p);
-    // The wide edge (y = 0 on the map) is the south edge of the drawing.
     const ys = p.site.plot.map(([, y]) => y);
-    const southEdge = p.site.plot.filter(([, y]) => Math.abs(y - Math.max(...ys)) < 1e-6);
-    expect(Math.abs(southEdge[0][0] - southEdge[1][0])).toBeCloseTo(14, 5);
+    const edge = (y: number) => {
+      const e = p.site.plot.filter(([, py]) => Math.abs(py - y) < 1e-6);
+      return Math.abs(e[0][0] - e[1][0]);
+    };
+    // The north (road) edge is at the bottom of the sheet; the wide south edge at the top.
+    expect(edge(Math.max(...ys))).toBeCloseTo(10, 5);
+    expect(edge(Math.min(...ys))).toBeCloseTo(14, 5);
+    expect(p.site.roadSide).toBe("S");
+    expect(p.site.northDeg).toBe(180);
+  });
+
+  it("draws every rectangular plot with the road at the bottom and north marked", () => {
+    for (const [facing, north] of [["N", 180], ["E", 90], ["S", 0], ["W", -90]] as const) {
+      const p = generatePlan({ ...base, facing });
+      expect(p.site.roadSide, facing).toBe("S");
+      expect(p.site.northDeg, facing).toBe(north);
+    }
   });
 });
 

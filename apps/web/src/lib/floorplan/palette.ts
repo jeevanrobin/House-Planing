@@ -24,7 +24,7 @@ export const ROOM_SHORT: Partial<Record<RoomType, string>> = {
   parking: "Parking",
   office: "Office",
   store: "Store",
-  utility: "Utility",
+  utility: "Wash Area",
   garden: "Garden",
   pool: "Pool",
   corridor: "Corridor",

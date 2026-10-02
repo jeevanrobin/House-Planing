@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { FloorPlanCanvas } from "@/components/planner/floor-plan-canvas";
 import { generatePlan } from "@/lib/floorplan/engine";
 import type { Requirements } from "@/lib/floorplan/types";
+import { planSubtitle, planTitle } from "@/lib/floorplan/units";
 
 /** The plan in the hero is generated live by the same engine users get. */
 const SAMPLE: Requirements = {
-  plotWidth: 12, plotDepth: 18, facing: "E", floors: 2, bedrooms: 3, bathrooms: 3, parking: 1,
+  plotWidth: 30 * 0.3048, plotDepth: 50 * 0.3048, facing: "E", floors: 2, bedrooms: 3, bathrooms: 3, parking: 1,
   balconies: 1, vastu: true, garden: false, pool: false, homeOffice: false,
   budget: "standard", style: "modern", luxury: 3,
 };
@@ -95,10 +96,10 @@ export default function Landing() {
               floor={sample.floors[0]}
               site={sample.site}
               view="plan"
-              meta={{ project: "3 BHK Residence", subtitle: "40 × 60 ft plot · East-facing", date: "Sample" }}
+              meta={{ project: planTitle(SAMPLE), subtitle: planSubtitle(SAMPLE, sample.plotArea), date: "Sample" }}
             />
             <figcaption className="mt-3 text-xs text-muted-foreground">
-              Generated live by the planning engine — the same output you get. 12 × 18 m plot, 3 bedrooms, 2 floors, ground floor shown.
+              Generated live by the planning engine — the same output you get. 30 × 50 ft East-facing plot, 3 BHK, G+1, ground floor shown.
             </figcaption>
           </motion.figure>
         </div>

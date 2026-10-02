@@ -269,7 +269,7 @@ export function groundProgram(req: Requirements, porch = false, fit = 1, trim: T
   const kitchenCol: Column = {
     rooms: trim >= 2 ? [room("kitchen", "Kitchen & Dining", s, "kitchen_dining")]
       : trim >= 1 ? [room("kitchen", "Kitchen", s)]
-        : [room("kitchen", "Kitchen", s), room("utility", "Utility", s, "utility", { optional: true })],
+        : [room("kitchen", "Kitchen", s), room("utility", "Wash Area", s, "utility", { optional: true })],
   };
   const svc: Unit[] = [{ cols: [kitchenCol], pin: "end" }];
   if (trim < 2) svc.push(single(room("dining", "Dining", s), "end"));
