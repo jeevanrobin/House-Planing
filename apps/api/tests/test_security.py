@@ -1,44 +1,18 @@
-"""API hardening: rate limits, OTP lockout, auth on AI routes, config guards.
+"""API hardening: auth on AI routes, rate limits, input bounds, config guards.
 
-Runs without Postgres/Redis: the DB session is replaced with a small fake and
-the limiter falls back to in-memory storage.
+Runs without Redis (the limiter uses in-memory storage in development).
 """
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import current_user
-from app.api.routes.auth import MAX_OTP_ATTEMPTS
 from app.core.config import Settings
 from app.core.rate_limit import limiter
-from app.core.security import hash_token
-from app.db.session import get_db
+from app.core.supabase_auth import AuthUser
 from app.main import app
 
 REQ = dict(plotWidth=12, plotDepth=18, facing="N", floors=1, bedrooms=2, bathrooms=2,
            parking=0, balconies=0)
-
-
-class FakeDB:
-    """Just enough of AsyncSession for the auth routes under test."""
-
-    def __init__(self, scalar_result=None):
-        self.scalar_result = scalar_result
-        self.added = []
-
-    async def scalar(self, _stmt):
-        return self.scalar_result
-
-    def add(self, obj):
-        self.added.append(obj)
-
-    async def commit(self):
-        pass
-
-    async def flush(self):
-        pass
 
 
 @pytest.fixture
@@ -49,14 +23,8 @@ def client():
     limiter.reset()
 
 
-def use_db(db):
-    async def _get_db():
-        yield db
-    app.dependency_overrides[get_db] = _get_db
-
-
 def as_user():
-    app.dependency_overrides[current_user] = lambda: SimpleNamespace(id="u1", role="user")
+    app.dependency_overrides[current_user] = lambda: AuthUser(id="u1", email="a@b.co", role="authenticated")
 
 
 # ---------- AI routes ----------
@@ -72,6 +40,12 @@ def test_ai_generate_is_gone(client):
     # The engine runs in the browser now; the server no longer generates plans.
     as_user()
     assert client.post("/api/v1/ai/generate", json={"requirements": REQ}).status_code == 404
+
+
+def test_legacy_auth_routes_are_gone(client):
+    # Sign-in is Supabase's job now.
+    for path in ("/api/v1/auth/login", "/api/v1/auth/otp/request", "/api/v1/projects", "/api/v1/plots"):
+        assert client.post(path, json={}).status_code == 404
 
 
 def test_ai_suggestions_requires_auth(client):
@@ -114,71 +88,28 @@ def test_ai_suggestions_is_rate_limited(client):
     assert codes[10] == 429
 
 
-# ---------- OTP ----------
-def test_otp_request_is_rate_limited(client):
-    use_db(FakeDB())
-    codes = [client.post("/api/v1/auth/otp/request", json={"email": "a@b.co"}).status_code
-             for _ in range(6)]
-    assert codes == [200] * 5 + [429]
-
-
-def _otp(code="123456", attempts=0):
-    return SimpleNamespace(
-        code_hash=hash_token(code), attempts=attempts, consumed_at=None,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-    )
-
-
-def test_otp_wrong_code_counts_attempt(client):
-    otp = _otp()
-    use_db(FakeDB(otp))
-    r = client.post("/api/v1/auth/otp/verify", json={"email": "a@b.co", "code": "000000"})
-    assert r.status_code == 400
-    assert otp.attempts == 1
-
-
-def test_otp_locked_after_max_attempts(client):
-    otp = _otp(attempts=MAX_OTP_ATTEMPTS)
-    use_db(FakeDB(otp))
-    # Even the correct code is refused once the attempt budget is spent.
-    r = client.post("/api/v1/auth/otp/verify", json={"email": "a@b.co", "code": "123456"})
-    assert r.status_code == 429
-    assert otp.consumed_at is None
-
-
-def test_otp_code_format_validated(client):
-    use_db(FakeDB(_otp()))
-    r = client.post("/api/v1/auth/otp/verify", json={"email": "a@b.co", "code": "12ab"})
-    assert r.status_code == 422
-
-
 # ---------- config ----------
 @pytest.fixture
 def clean_env(monkeypatch):
     # CI exports ENV=development; config tests must see only what they pass in.
-    for var in ("ENV", "JWT_SECRET"):
+    for var in ("ENV", "SUPABASE_URL"):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_production_rejects_default_jwt_secret(clean_env):
-    with pytest.raises(ValueError, match="JWT_SECRET"):
-        Settings(_env_file=None, ENV="production")
-
-
-def test_production_rejects_short_jwt_secret(clean_env):
-    with pytest.raises(ValueError, match="JWT_SECRET"):
-        Settings(_env_file=None, ENV="production", JWT_SECRET="short")
-
-
 def test_env_defaults_to_production(clean_env):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="SUPABASE_URL"):
         Settings(_env_file=None)
 
 
-def test_production_accepts_strong_secret(clean_env):
-    s = Settings(_env_file=None, ENV="production", JWT_SECRET="x" * 64)
-    assert not s.is_dev
+def test_production_requires_supabase_url(clean_env):
+    with pytest.raises(ValueError, match="SUPABASE_URL"):
+        Settings(_env_file=None, ENV="production", SUPABASE_URL="http://insecure.example")
 
 
-def test_development_allows_default_secret(clean_env):
+def test_production_accepts_supabase_url(clean_env):
+    s = Settings(_env_file=None, ENV="production", SUPABASE_URL="https://abc.supabase.co")
+    assert s.supabase_issuer == "https://abc.supabase.co/auth/v1"
+
+
+def test_development_needs_no_supabase(clean_env):
     assert Settings(_env_file=None, ENV="development").is_dev

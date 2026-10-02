@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Compass } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Compass, LogOut } from "lucide-react";
+import { supabase } from "@/lib/supabase/client";
+import { useUser } from "@/lib/supabase/use-user";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 
@@ -12,6 +15,14 @@ const NAV = [
 ];
 
 export function SiteHeader() {
+  const user = useUser();
+  const router = useRouter();
+  const signOut = async () => {
+    await supabase().auth.signOut();
+    router.replace("/");
+    router.refresh();
+  };
+  const initial = (user?.user_metadata?.full_name || user?.email || "?").trim().charAt(0).toUpperCase();
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/80 backdrop-blur-md">
       <div className="container flex h-16 items-center justify-between">
@@ -35,12 +46,31 @@ export function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
-            <Link href="/dashboard">Sign in</Link>
-          </Button>
-          <Button asChild size="sm">
-            <Link href="/planner">Start free</Link>
-          </Button>
+          {user ? (
+            <>
+              <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+                <Link href="/dashboard">Dashboard</Link>
+              </Button>
+              <span title={user.email ?? undefined} aria-label={`Signed in as ${user.email}`}
+                className="flex size-9 items-center justify-center rounded-full border bg-accent font-display text-sm font-semibold text-accent-foreground">
+                {initial}
+              </span>
+              <Button variant="ghost" size="icon" aria-label="Sign out" onClick={signOut}>
+                <LogOut />
+              </Button>
+            </>
+          ) : (
+            <>
+              {user === null && (
+                <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+                  <Link href="/login">Sign in</Link>
+                </Button>
+              )}
+              <Button asChild size="sm">
+                <Link href="/planner">Start free</Link>
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </header>

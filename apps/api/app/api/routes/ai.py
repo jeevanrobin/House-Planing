@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import current_user
 from app.core.rate_limit import limiter
-from app.models import User
+from app.core.supabase_auth import AuthUser
 from app.schemas import SuggestionsIn
 from app.services.llm import critique_plan
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 @router.post("/suggestions")
 @limiter.limit("10/minute")
-async def suggestions(request: Request, body: SuggestionsIn, user: User = Depends(current_user)) -> dict:
+async def suggestions(request: Request, body: SuggestionsIn, user: AuthUser = Depends(current_user)) -> dict:
     """AI design critique for a plan generated in the browser.
 
     The floor-plan engine runs client-side (apps/web/src/lib/floorplan); the

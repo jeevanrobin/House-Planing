@@ -3,30 +3,30 @@
 ## 1. System overview
 
 ```
-                       ┌────────────────────────┐
-        Browser  ─────▶ │  Next.js 15 (SSR/edge) │  ── static/CDN (CloudFront)
-                        └───────────┬────────────┘
-                                    │ HTTPS / JWT (Bearer)
-                        ┌───────────▼────────────┐
-                        │   FastAPI (ASGI)        │
-                        │   • auth  • projects    │
-                        │   • ai/suggestions      │
-                        └─────┬──────────┬────────┘
-                              │          │
-                   ┌──────────▼───┐  ┌───▼─────────┐
-                   │ PostgreSQL 16│  │   Redis     │  (cache, rate-limit,
-                   └──────────────┘  └─────────────┘   OTP, job queue)
-                              │
-                   ┌──────────▼───────────┐
-                   │ Worker (RQ/Celery)   │  PDF/DXF export, heavy AI jobs
-                   └──────────┬───────────┘
-                              ▼
-                        S3 + CloudFront (exported files, assets)
+                 ┌─────────────────────────────┐
+  Browser ─────▶ │ Next.js 15 (SSR + client)    │ ── static/CDN
+                 │ • planning engine (TS)       │
+                 │ • drawing / editor / export  │
+                 └──┬─────────────┬────────────┘
+     publishable key│             │ Supabase access token (Bearer)
+       + RLS        │             │
+          ┌─────────▼──────┐  ┌───▼──────────────────┐
+          │ Supabase        │  │ FastAPI              │
+          │ • Auth (email,  │  │ • /ai/suggestions    │──▶ Claude (Vertex AI)
+          │   magic link,   │  │   (verifies tokens   │
+          │   Google)       │  │    via project JWKS) │
+          │ • Postgres +RLS │  └───┬──────────────────┘
+          │   projects,     │      │
+          │   plots, plans  │  ┌───▼────┐
+          └─────────────────┘  │ Redis  │ rate limits
+                               └────────┘
 ```
 
-The planning engine is **CPU-only and deterministic**, so plan generation runs
-synchronously inside the API (and even client-side in the browser). Only export
-rendering (PDF/DXF) and any future LLM-assisted refinement are offloaded to workers.
+The planning engine is **CPU-only and deterministic** and runs in the browser, so a
+plan appears instantly with no server round-trip. The browser reads and writes its own
+data directly in Supabase; row-level security (`supabase/migrations`) guarantees a user
+can only reach their own rows. The API exists for work that needs server credentials:
+today the optional Claude critique; later exports and renders.
 
 ## 2. Design system
 
@@ -44,15 +44,14 @@ rendering (PDF/DXF) and any future LLM-assisted refinement are offloaded to work
 
 | Concern | Approach |
 | --- | --- |
-| AuthN | JWT access (30 min) + rotating refresh tokens hashed at rest |
-| Passwords | bcrypt via passlib; OAuth accounts have no password |
-| OTP | 6-digit, hashed, TTL; locked after 5 wrong guesses; constant-time compare; never returned in prod |
-| Rate limiting | `slowapi` (Redis-backed in prod) per-IP defaults |
+| AuthN | Supabase Auth (email + password, magic link, Google). Sessions in HTTP-only cookies, refreshed by Next.js middleware. |
+| AuthZ | Row-level security on every table: owner-only reads/writes; plots and plans can only be created inside a project you own. |
+| API auth | Supabase access tokens verified against the project's public JWKS (ES256/RS256 only; audience, issuer, expiry checked). No shared secret. |
+| Keys | Only the publishable key reaches the browser; the secret key is never used by the web app. |
+| Redirects | Post-login `next` paths are restricted to same-site paths (no open redirects). |
+| Rate limiting | `slowapi` (Redis-backed in prod) per-IP defaults, stricter on AI routes. |
 | Headers | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, CSP at the edge |
-| CSRF | Token-in-header pattern for cookie flows; bearer tokens are CSRF-immune |
-| XSS | React auto-escaping; no `dangerouslySetInnerHTML`; strict CSP |
-| Transport | TLS everywhere; HSTS at the load balancer |
-| Secrets | Env-injected; AWS Secrets Manager / SSM in prod; sensitive columns encryptable |
+| XSS | React auto-escaping; no `dangerouslySetInnerHTML` |
 
 ## 4. Performance
 
@@ -65,8 +64,8 @@ rendering (PDF/DXF) and any future LLM-assisted refinement are offloaded to work
 ## 5. Scaling to 100k+ users
 
 - **Stateless API** behind an ALB → horizontal autoscaling (ECS Fargate / EKS).
-- **Postgres** — managed RDS/Aurora with a read replica; partition `usage_events`,
-  `ai_generations` by month; covering indexes already defined for hot paths.
+- **Supabase Postgres** — managed, with connection pooling; indexes on `(owner_id, updated_at)` and
+  `(project_id, created_at)` cover the dashboard queries.
 - **Redis** — ElastiCache (cluster mode) for cache, rate limiting and the job queue.
 - **Workers** — separate autoscaled pool for exports; queue depth drives scale.
 - **Object storage** — S3 for exports/assets, served via CloudFront.
@@ -79,19 +78,19 @@ rendering (PDF/DXF) and any future LLM-assisted refinement are offloaded to work
 Route53 → CloudFront ──▶ S3 (web static) 
                     └──▶ ALB ──▶ ECS Fargate: web (Next server) 
                               └▶ ECS Fargate: api (uvicorn, N tasks)
-                                   ├─ RDS Aurora PostgreSQL (Multi-AZ + replica)
+                                   ├─ Supabase (Auth + Postgres, managed)
                                    ├─ ElastiCache Redis
                                    └─ ECS Fargate: worker pool
 Secrets Manager · CloudWatch (logs/metrics/alarms) · WAF on CloudFront/ALB
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks, lints, builds the web app, runs the
-engine smoke test, imports the API, and builds both Docker images. CD (to add):
+CI (`.github/workflows/ci.yml`) typechecks, lints, tests and builds the web app,
+runs the API tests, and builds both Docker images. CD (to add):
 push images to ECR and `aws ecs update-service` per environment, gated on CI green.
 
 ## 7. Data model
 
-See `apps/api/db/schema.sql` — users, otp_codes, refresh_tokens, subscriptions,
-payments, projects, plots, requirements, floor_plans (versioned), ai_generations,
-exports, usage_events. UUID PKs, `JSONB` for plan/boundary payloads, partial unique
-indexes for "one active subscription" and "one current plan per project".
+See `supabase/migrations/0001_init.sql`: `profiles` (one per auth user, created by
+trigger), `projects`, `plots` (GeoJSON boundary + metrics) and `plans` (the brief and
+the generated plan as JSONB, with Vastu score and built-up area for listings). UUID
+keys, cascading deletes from the auth user down, size limits on JSON payloads.

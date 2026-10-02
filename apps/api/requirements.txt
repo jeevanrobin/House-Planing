@@ -1,21 +1,12 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-sqlalchemy[asyncio]==2.0.36
-asyncpg==0.30.0
-alembic==1.14.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
+# Verifies Supabase access tokens (ES256/RS256 via the project's JWKS).
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-# passlib 1.7.4 breaks on bcrypt>=4.1 (removed __about__, strict 72-byte limit).
-bcrypt==4.0.1
 redis==5.2.1
 slowapi==0.1.9
 httpx==0.28.1
-python-multipart==0.0.20
-email-validator==2.2.0
-# Google ID-token verification (fetches Google's signing certs).
-google-auth[requests]==2.37.0
 
 # Claude via Google Vertex AI (optional AI design critique).
 # Pulls in google-auth for Vertex credential resolution.
