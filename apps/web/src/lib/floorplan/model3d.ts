@@ -60,7 +60,7 @@ const FLOOR_MAT: Partial<Record<RoomType, Material>> = {
   office: "floorWood", dress: "floorWood", pooja: "floorStone",
   kitchen: "floorTile", bathroom: "floorTile", toilet: "floorTile", utility: "floorTile",
   sitout: "floorDeck", balcony: "floorDeck", terrace: "floorPaving", parking: "floorPaving",
-  stair: "floorStone", corridor: "floorStone", store: "floorStone", foyer: "floorStone",
+  stair: "floorStone", corridor: "floorStone", store: "floorStone", foyer: "floorStone", lift: "floorStone",
 };
 const OPEN: RoomType[] = ["sitout", "balcony", "terrace", "parking"];
 

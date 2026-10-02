@@ -13,10 +13,11 @@ class Requirements(BaseModel):
     plotWidth: float = Field(gt=2, le=200)
     plotDepth: float = Field(gt=2, le=200)
     facing: Facing
-    floors: int = Field(ge=1, le=4)
+    floors: int = Field(ge=1, le=6)
     plotPolygon: list[Vertex] | None = Field(default=None, min_length=3, max_length=100)
     plotUse: Literal["balanced", "max"] | None = None
-    buildingType: Literal["house", "duplex", "rental", "cottage", "manduva"] | None = None
+    buildingType: Literal["house", "duplex", "rental", "cottage", "manduva", "apartment"] | None = None
+    flatsPerFloor: Literal[2, 3, 4] | None = None
     bedrooms: int = Field(ge=1, le=10)
     bathrooms: int = Field(ge=1, le=10)
     parking: int = Field(ge=0, le=3)

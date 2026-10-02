@@ -30,9 +30,10 @@ export type RoomType =
   | "dress"
   | "sitout"
   | "lounge"
-  | "terrace";
+  | "terrace"
+  | "lift";
 
-export type BuildingType = "house" | "duplex" | "rental" | "cottage" | "manduva";
+export type BuildingType = "house" | "duplex" | "rental" | "cottage" | "manduva" | "apartment";
 export type FloorAccess = "stairOutside" | "fromStair";
 
 export type Zone = "public" | "service" | "private" | "circulation" | "outdoor";
@@ -62,8 +63,12 @@ export interface Requirements {
    *   on three sides (sloped tiled roof).
    * "manduva": single storey, rooms in a ring around an open courtyard with a
    *   verandah around it (Andhra manduva illu / Kerala nalukettu).
+   * "apartment": stilt parking on the ground floor and flats above, around a
+   *   stair + lift core; bedrooms/bathrooms are per flat.
    */
   buildingType?: BuildingType;
+  /** Apartments: flats on each residential floor. */
+  flatsPerFloor?: 2 | 3 | 4;
 
   // Step 2
   bedrooms: number;
@@ -102,6 +107,8 @@ export interface Room extends Rect {
   polygon?: Polygon;
   /** Ensuite bath / dressing room: the bedroom it belongs to. */
   parentId?: string;
+  /** Apartments: the flat this room belongs to ("101"); common areas have none. */
+  unit?: string;
 }
 
 export interface Door {

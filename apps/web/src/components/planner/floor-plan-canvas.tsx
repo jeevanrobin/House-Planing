@@ -349,6 +349,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           {/* Fixtures */}
           <g pointerEvents="none">
             {rooms.filter((r) => r.type === "stair").map((r) => <StairShape key={`st-${r.id}`} r={r} />)}
+            {rooms.filter((r) => r.type === "lift").map((r) => <LiftShape key={`lift-${r.id}`} r={r} />)}
             {rooms.filter((r) => r.type === "parking").map((r) => (
               <CarShape key={`car-${r.id}`} x={r.x + 0.15} y={r.y + 0.15} w={r.w - 0.3} h={r.h - 0.3} />
             ))}
@@ -386,7 +387,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
                 stroke={C.room} strokeWidth={0.09} strokeLinejoin="round" paintOrder="stroke">
                 <text x={cx} y={cy - (showDims ? fs * 0.55 : 0)} dominantBaseline="middle" fill={C.ink}
                   style={{ fontSize: fs, fontWeight: 650, letterSpacing: 0.01 }}>
-                  {r.label.toUpperCase()}
+                  {(r.unit && r.type === "living" ? `${r.label} · ${r.unit}` : r.label).toUpperCase()}
                 </text>
                 {showDims && (
                   <text x={cx} y={cy + fs * 0.75} dominantBaseline="middle" fill={C.inkSoft}
@@ -539,6 +540,20 @@ function WindowMarkShape({ w, walls }: { w: WindowMark; walls: Wall[] }) {
           <line x1={w.x} y1={w.y} x2={w.x + w.width} y2={w.y} stroke={C.glass} strokeWidth={0.03} />
         </>
       )}
+    </g>
+  );
+}
+
+/** Lift car in its shaft: a square with a cross, the plan convention. */
+function LiftShape({ r }: { r: Room }) {
+  const C = React.useContext(Pal);
+  const s = Math.min(r.w, r.h) - 0.4;
+  const x = r.x + (r.w - s) / 2;
+  const y = r.y + (r.h - s) / 2;
+  return (
+    <g fill="none" stroke={C.inkSoft} strokeWidth={0.04}>
+      <rect x={x} y={y} width={s} height={s} />
+      <path d={`M ${x} ${y} L ${x + s} ${y + s} M ${x + s} ${y} L ${x} ${y + s}`} />
     </g>
   );
 }

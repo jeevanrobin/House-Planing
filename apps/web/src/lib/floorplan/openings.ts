@@ -27,6 +27,7 @@ const ACCESS: Partial<Record<RoomType, RoomType[]>> = {
   master_bedroom: ["corridor", "lounge", "living", "dining", "stair"],
   bathroom: ["corridor", "lounge", "dining", "living", "stair"],
   terrace: ["lounge", "corridor", "stair", "bedroom", "master_bedroom", "dining", "living"],
+  lift: ["corridor"],
 };
 
 /** Open-plan connections get a doorless opening instead of a leaf. */
@@ -111,8 +112,12 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
   const sealedStair = (t: RoomType) => access === "stairOutside" && t === "stair";
   const windows: WindowMark[] = [];
   const byId = new Map(rooms.map((r) => [r.id, r]));
-  const neighbours = (r: Room) =>
+  // Apartments: rooms connect only within one flat, or within the common areas;
+  // a flat meets the lobby through its front door alone (made below).
+  const sameHome = (a: Room, b: Room) => (a.unit ?? "") === (b.unit ?? "");
+  const touching = (r: Room) =>
     rooms.filter((o) => o.id !== r.id).map((o) => ({ o, s: sharedWall(r, o) })).filter((n): n is { o: Room; s: Shared } => !!n.s);
+  const neighbours = (r: Room) => touching(r).filter((n) => sameHome(r, n.o));
   const linked = new Set<string>();
   const link = (a: Room, b: Room) => linked.add([a.id, b.id].sort().join("|"));
   const isLinked = (a: Room, b: Room) => linked.has([a.id, b.id].sort().join("|"));
@@ -134,6 +139,14 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
       continue;
     }
 
+    if (r.type === "living" && r.unit) {
+      // A flat's front door opens off the common lobby.
+      const lobby = touching(r).filter((n) => !n.o.unit && n.o.type === "corridor" && n.s.hi - n.s.lo >= 1.0)
+        .sort((a, b) => (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
+      const d = lobby && makeDoor(r, lobby.o, lobby.s, "main", 1.0);
+      if (d) { doors.push(d); link(r, lobby!.o); }
+      continue;
+    }
     if (r.type === "living" && access === "fromStair") {
       // An upper home's front door opens off the stair landing.
       const st = ns.find((n) => n.o.type === "stair" && n.s.hi - n.s.lo >= 1.0);
@@ -207,7 +220,9 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
   // circulation and living spaces over pass-through rooms.
   const PASS = ["corridor", "living", "dining", "lounge", "foyer", "stair", "sitout", "kitchen", "office", "terrace", "parking"];
   const entry = rooms.filter((r) => ["sitout", "parking"].includes(r.type) || (r.type === "living" && doors.some((d) => d.kind === "main" && d.roomId === r.id)));
-  const starts = entry.length ? entry : rooms.filter((r) => r.type === "stair");
+  // Apartments: the common stair is a way in as well as each flat's front door.
+  const commonStair = rooms.some((r) => r.unit) ? rooms.filter((r) => r.type === "stair" && !r.unit) : [];
+  const starts = entry.length ? [...entry, ...commonStair] : rooms.filter((r) => r.type === "stair");
   for (let guard = 0; guard < rooms.length; guard++) {
     const reached = new Set(starts.map((r) => r.id));
     const queue = [...reached];

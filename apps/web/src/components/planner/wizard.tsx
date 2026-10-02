@@ -18,6 +18,7 @@ const TYPES: { value: BuildingType; title: string; desc: string }[] = [
   { value: "rental", title: "Floors for rent", desc: "A separate home on every floor, with a staircase from outside." },
   { value: "cottage", title: "Cottage", desc: "Single storey, rooms round a dining hall, verandahs outside." },
   { value: "manduva", title: "Manduva house", desc: "Single storey, rooms round an open courtyard. Needs ~45×55 ft." },
+  { value: "apartment", title: "Apartment", desc: "Stilt parking, flats above round a stair and lift. Needs ~50×60 ft." },
 ];
 const SINGLE_STOREY: BuildingType[] = ["cottage", "manduva"];
 /** Common Indian plot sizes in feet (width along the road × depth). */
@@ -174,7 +175,9 @@ export function RequirementWizard({
                           ...r,
                           buildingType: t.value,
                           // A duplex is two floors; rental homes need at least two.
+                          flatsPerFloor: t.value === "apartment" ? r.flatsPerFloor ?? 2 : undefined,
                           floors: t.value === "duplex" ? 2 : t.value === "rental" ? Math.max(2, r.floors)
+                            : t.value === "apartment" ? Math.max(4, r.floors)
                             : SINGLE_STOREY.includes(t.value) ? 1 : r.floors,
                         }))}
                         className={cn("rounded-md border p-3 text-left transition-colors",
@@ -233,8 +236,9 @@ export function RequirementWizard({
                   options={FACINGS.map((f) => ({ label: f, value: f }))} />
               </Field>
               {req.buildingType !== "duplex" && !SINGLE_STOREY.includes(req.buildingType ?? "house") && (
-                <Stepper label={req.buildingType === "rental" ? "Floors (one home each)" : "Number of floors"}
-                  value={req.floors} min={req.buildingType === "rental" ? 2 : 1} max={4} onChange={(v) => set("floors", v)} />
+                <Stepper label={req.buildingType === "rental" ? "Floors (one home each)" : req.buildingType === "apartment" ? "Floors (ground = stilt parking)" : "Number of floors"}
+                  value={req.floors} min={req.buildingType === "rental" || req.buildingType === "apartment" ? 2 : 1}
+                  max={req.buildingType === "apartment" ? 6 : 4} onChange={(v) => set("floors", v)} />
               )}
               {req.plotPolygon && (
                 <Field label="How much of the plot should the house use?">
@@ -261,13 +265,22 @@ export function RequirementWizard({
 
           {step === 1 && (
             <div className="space-y-3">
-              {req.buildingType === "rental" && (
-                <p className="text-sm text-muted-foreground">Rooms for <b className="text-foreground">each</b> home — every floor gets the same.</p>
+              {(req.buildingType === "rental" || req.buildingType === "apartment") && (
+                <p className="text-sm text-muted-foreground">Rooms for <b className="text-foreground">each</b> {req.buildingType === "apartment" ? "flat" : "home"} — they&apos;re all the same.</p>
               )}
-              <Stepper label={req.buildingType === "rental" ? "Bedrooms per home" : "Bedrooms"} value={req.bedrooms} min={1} max={8} onChange={(v) => set("bedrooms", v)} />
-              <Stepper label={req.buildingType === "rental" ? "Bathrooms per home" : "Bathrooms"} value={req.bathrooms} min={1} max={8} onChange={(v) => set("bathrooms", v)} />
-              <Stepper label="Parking (cars)" value={req.parking} min={0} max={3} onChange={(v) => set("parking", v as Requirements["parking"])} />
-              <Stepper label="Balconies" value={req.balconies} min={0} max={6} onChange={(v) => set("balconies", v)} />
+              {req.buildingType === "apartment" && (
+                <Stepper label="Flats per floor" value={req.flatsPerFloor ?? 2} min={2} max={4}
+                  onChange={(v) => set("flatsPerFloor", v as 2 | 3 | 4)} />
+              )}
+              <Stepper label={req.buildingType === "rental" ? "Bedrooms per home" : req.buildingType === "apartment" ? "Bedrooms per flat" : "Bedrooms"} value={req.bedrooms} min={1} max={8} onChange={(v) => set("bedrooms", v)} />
+              <Stepper label={req.buildingType === "rental" ? "Bathrooms per home" : req.buildingType === "apartment" ? "Bathrooms per flat" : "Bathrooms"} value={req.bathrooms} min={1} max={8} onChange={(v) => set("bathrooms", v)} />
+              {/* Apartments size their stilt parking and balconies from the flats. */}
+              {req.buildingType !== "apartment" && (
+                <>
+                  <Stepper label="Parking (cars)" value={req.parking} min={0} max={3} onChange={(v) => set("parking", v as Requirements["parking"])} />
+                  <Stepper label="Balconies" value={req.balconies} min={0} max={6} onChange={(v) => set("balconies", v)} />
+                </>
+              )}
             </div>
           )}
 
