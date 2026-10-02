@@ -32,7 +32,7 @@ export type RoomType =
   | "lounge"
   | "terrace";
 
-export type BuildingType = "house" | "duplex" | "rental";
+export type BuildingType = "house" | "duplex" | "rental" | "cottage" | "manduva";
 export type FloorAccess = "stairOutside" | "fromStair";
 
 export type Zone = "public" | "service" | "private" | "circulation" | "outdoor";
@@ -58,6 +58,10 @@ export interface Requirements {
    * "duplex": one family over two floors — living below, bedrooms above.
    * "rental": every floor is a separate home with its own hall and kitchen,
    *   reached by a stair from outside; bedrooms/bathrooms are per floor.
+   * "cottage": single storey, rooms around a central dining hall, verandahs
+   *   on three sides (sloped tiled roof).
+   * "manduva": single storey, rooms in a ring around an open courtyard with a
+   *   verandah around it (Andhra manduva illu / Kerala nalukettu).
    */
   buildingType?: BuildingType;
 

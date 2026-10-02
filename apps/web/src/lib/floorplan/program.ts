@@ -319,6 +319,42 @@ export function rentalUpperProgram(req: Requirements, floor: number, fit = 1, tr
   };
 }
 
+/** Rooms of a courtyard (manduva) or central-hall (cottage) home, before they are placed on the ring. */
+export interface RingProgram {
+  living: RoomSpec;
+  /** Dining hall at the centre (cottage) — the manduva's centre is the open courtyard. */
+  core?: RoomSpec;
+  /** Single rooms: kitchen, pooja, store, dining (manduva), bedrooms without a bath, common baths. */
+  singles: RoomSpec[];
+  /** Bedrooms with their attached bath, kept side by side. */
+  pairs: [RoomSpec, RoomSpec][];
+}
+
+export function ringProgram(req: Requirements, fit = 1): RingProgram {
+  keySeq = 0;
+  const s = scale(req, fit);
+  const manduva = req.buildingType === "manduva";
+  const living = room("living", manduva ? "Hall" : "Living Room", s);
+  const core = manduva ? undefined : room("dining", "Dining Hall", s);
+  const singles: RoomSpec[] = [room("kitchen", "Kitchen", s), room("pooja", "Pooja", s), room("store", "Store", s)];
+  if (manduva) singles.push(room("dining", "Dining", s));
+  const pairs: [RoomSpec, RoomSpec][] = [];
+  let baths = req.bathrooms;
+  let n = 1;
+  for (let b = 0; b < req.bedrooms; b++) {
+    const master = b === 0 && req.bedrooms > 1;
+    const bed = master ? room("master_bedroom", "Master Bedroom", s) : room("bedroom", `Bedroom ${n++}`, s);
+    if (baths > 0) {
+      baths -= 1;
+      pairs.push([bed, room("bathroom", master ? "Master Bath" : "Bath", s, "bathroom", { parentKey: bed.key })]);
+    } else {
+      singles.push(bed);
+    }
+  }
+  for (let i = 0; i < baths; i++) singles.push(room("bathroom", "Common Bath", s));
+  return { living, core, singles, pairs };
+}
+
 /** Upper floor: [balcony] → bedrooms → lounge + stair → [corridor → bedrooms] → [terrace]. */
 // Note: the ground floor puts its stair last in the service band, so upper stairs pin "end" too.
 export function upperProgram(req: Requirements, floor: number, fit = 1, trim: Trim = 0, stairW = STAIR_W): FloorProgram {

@@ -13,8 +13,8 @@ const EPS = 0.02;
 /** Rooms each type is entered from, in order of preference. */
 const ACCESS: Partial<Record<RoomType, RoomType[]>> = {
   living: ["sitout", "foyer", "parking"],
-  dining: ["living", "lounge"],
-  kitchen: ["dining", "living"],
+  dining: ["living", "lounge", "corridor"],
+  kitchen: ["dining", "living", "corridor"],
   utility: ["kitchen", "dining"],
   store: ["kitchen", "dining", "corridor", "living", "lounge"],
   toilet: ["dining", "living", "corridor", "lounge"],
