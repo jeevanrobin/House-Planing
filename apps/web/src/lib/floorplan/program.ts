@@ -60,7 +60,7 @@ const ZONE_OF: Record<RoomType, Zone> = {
   kitchen: "service", store: "service", utility: "service", bathroom: "service", toilet: "service",
   parking: "service", stair: "circulation", corridor: "circulation",
   bedroom: "private", master_bedroom: "private", pooja: "private", office: "private", dress: "private",
-  balcony: "outdoor", garden: "outdoor", pool: "outdoor", terrace: "outdoor",
+  balcony: "outdoor", garden: "outdoor", pool: "outdoor", terrace: "outdoor", lift: "circulation",
 };
 
 // Base sizes at luxury 3 / standard budget: area (m²), min width, min depth.

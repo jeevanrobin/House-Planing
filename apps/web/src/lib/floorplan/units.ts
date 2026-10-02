@@ -25,13 +25,14 @@ const FACING_NAME: Record<Facing, string> = {
 /** "30′×50′ East-facing house" (rectangular plots) or "East-facing house" (map-drawn plots). */
 export function planTitle(req: Requirements): string {
   const size = req.plotPolygon ? "" : `${plotFt(req.plotWidth)}×${plotFt(req.plotDepth)} `;
-  const kind = { duplex: "duplex", rental: "rental building", cottage: "cottage", manduva: "manduva house", house: "house" }[req.buildingType ?? "house"];
+  const kind = { duplex: "duplex", rental: "rental building", cottage: "cottage", manduva: "manduva house", apartment: "apartment", house: "house" }[req.buildingType ?? "house"];
   return `${size}${FACING_NAME[req.facing]}-facing ${kind}`;
 }
 
 /** "3 BHK · G+1 · 1,500 sq ft plot" (rental: "2 × 2 BHK homes · G+1 · …") */
 export function planSubtitle(req: Requirements, plotArea: number): string {
   const floors = req.floors > 1 ? `G+${req.floors - 1}` : "Ground floor only";
-  const homes = req.buildingType === "rental" ? `${req.floors} × ${req.bedrooms} BHK homes` : `${req.bedrooms} BHK`;
+  const homes = req.buildingType === "rental" ? `${req.floors} × ${req.bedrooms} BHK homes`
+    : req.buildingType === "apartment" ? `${(req.flatsPerFloor ?? 2) * (req.floors - 1)} × ${req.bedrooms} BHK flats` : `${req.bedrooms} BHK`;
   return `${homes} · ${floors} · ${sqft(plotArea)} sq ft plot`;
 }

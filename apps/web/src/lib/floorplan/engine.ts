@@ -16,7 +16,7 @@
  *  6. Site      – parking, pool and garden go in the open land around the house.
  */
 import {
-  BALCONY_D, CAR_W, STAIR_W_NARROW, groundProgram, rentalUpperProgram, ringProgram, stairWidthFor, upperProgram,
+  BALCONY_D, CAR_W, STAIR_MIN_D, STAIR_W, STAIR_W_NARROW, ZONE_OF, groundProgram, rentalUpperProgram, ringProgram, stairWidthFor, upperProgram,
   type Band, type Trim, type FloorProgram, type RoomSpec, type Unit,
 } from "./program";
 import {
@@ -36,7 +36,7 @@ import type { FloorAccess, FloorPlan, PlanResult, Polygon, Rect, Requirements, R
 
 export { placeOpenings } from "./openings";
 
-const FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor"];
+const FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor", "Fifth Floor"];
 const OPEN_TYPES = new Set(["sitout", "balcony", "terrace", "parking"]);
 const MAX_HOUSE_W = 30;
 
@@ -781,19 +781,30 @@ export function validatePlanRequirements(plan: PlanResult, req: Requirements): {
       errors.push(`${room.label} is too narrow (${Math.min(room.w, room.h).toFixed(2)} m).`);
     }
   }
-  for (const car of all.filter((r) => r.type === "parking")) {
+  // Car porches and bays (not drive aisles or two-wheeler strips) must hold a car.
+  for (const car of all.filter((r) => r.type === "parking" && /^Car/.test(r.label))) {
     if (Math.max(car.w, car.h) < 4.25) errors.push(`${car.label} is only ${Math.max(car.w, car.h).toFixed(1)} m long; a car needs at least 4.3 m (14 ft).`);
   }
   const count = (pred: (r: Room) => boolean) => all.filter(pred).length;
   const beds = count((r) => r.type === "bedroom" || r.type === "master_bedroom");
   const baths = count((r) => r.type === "bathroom");
-  // Rental: the brief is per home, one home per floor.
-  const homes = req.buildingType === "rental" ? req.floors : 1;
+  // Rental: the brief is per home, one home per floor; apartments: per flat.
+  const apartment = req.buildingType === "apartment";
+  const homes = req.buildingType === "rental" ? req.floors : apartment ? (req.flatsPerFloor ?? 2) * (req.floors - 1) : 1;
   if (beds !== req.bedrooms * homes) errors.push(`Expected ${req.bedrooms * homes} bedrooms, but generated ${beds}.`);
   if (baths !== req.bathrooms * homes) errors.push(`Expected ${req.bathrooms * homes} bathrooms, but generated ${baths}.`);
-  if (homes > 1) {
+  if (homes > 1 && !apartment) {
     plan.floors.forEach((f) => {
       if (!f.rooms.some((r) => r.type === "kitchen")) errors.push(`${f.name} has no kitchen of its own.`);
+    });
+  }
+  if (apartment) {
+    plan.floors.slice(1).forEach((f) => {
+      const flats = new Set(f.rooms.filter((r) => r.unit).map((r) => r.unit));
+      for (const u of flats) {
+        if (!f.rooms.some((r) => r.unit === u && r.type === "kitchen")) errors.push(`Flat ${u} has no kitchen.`);
+        if (!f.doors.some((d) => d.kind === "main" && f.rooms.find((r) => r.id === d.roomId)?.unit === u)) errors.push(`Flat ${u} has no front door on the lobby.`);
+      }
     });
   }
   if (req.homeOffice && !count((r) => r.type === "office")) errors.push("Home Office was requested but not generated.");
@@ -810,6 +821,13 @@ function mirrored(frame: PlotFrame): PlotFrame {
 }
 
 export function generatePlan(req: Requirements): PlanResult {
+  if (req.buildingType === "apartment") {
+    const apt = generateApartment(req);
+    if (apt) return apt;
+    const plain = generatePlan({ ...req, buildingType: "rental", floors: Math.max(2, Math.min(4, req.floors)) });
+    plain.suggestions.unshift({ kind: "space", severity: "warn", message: "This plot is too small for an apartment block with a lift, so it is planned as floors for rent instead." });
+    return plain;
+  }
   if (req.buildingType === "manduva" || req.buildingType === "cottage") {
     const ring = generateRing(req, req.buildingType);
     if (ring) return ring;
@@ -830,6 +848,165 @@ export function generatePlan(req: Requirements): PlanResult {
   const rectPlan = generateShaped({ ...req, plotPolygon: undefined, plotWidth: r.w + 2 * sb.side, plotDepth: r.h + sb.front + sb.rear });
   rectPlan.suggestions.push({ kind: "space", severity: "warn", message: "This plot's outline is unusual, so the plan uses the largest regular area inside it." });
   return rectPlan;
+}
+
+/** Ways to fit a brief, best first: trim the program before shrinking rooms. */
+const ATTEMPTS: { fit: number; trim: Trim; noSitout: boolean }[] = [
+  { fit: 1, trim: 0, noSitout: false }, { fit: 0.9, trim: 0, noSitout: false },
+  { fit: 1, trim: 1, noSitout: false }, { fit: 0.9, trim: 1, noSitout: false },
+  { fit: 1, trim: 2, noSitout: false }, { fit: 0.9, trim: 2, noSitout: false },
+  { fit: 0.9, trim: 2, noSitout: true }, { fit: 0.8, trim: 2, noSitout: false },
+  { fit: 0.8, trim: 2, noSitout: true }, { fit: 0.72, trim: 2, noSitout: true },
+];
+
+/* ------------------------------------------------------------------ */
+/* Apartments                                                          */
+/* ------------------------------------------------------------------ */
+
+const LIFT_W = 2.0;
+
+/**
+ * One flat laid out in a w x d rectangle by the band engine, entered from
+ * the lobby along its y = 0 edge (flat-local: x along the lobby, y away from it).
+ * Open space left over at the outer edge becomes the flat's balcony.
+ */
+function layoutFlat(req: Requirements, w: number, d: number, unit: string): { placed: Placed[]; cramped: number } {
+  const fr: Requirements = {
+    ...req, buildingType: "house", floors: 1, parking: 0, garden: false, pool: false, homeOffice: false, balconies: 0,
+    plotPolygon: undefined, plotUse: "balanced", plotWidth: w, plotDepth: d, facing: "S",
+  };
+  const frame = makePlotFrame(fr);
+  const sb: Setbacks = { front: 0, rear: 0, side: 0 };
+  const env = buildableEnvelope(frame, sb);
+  let best: Candidate | null = null;
+  for (const a of ATTEMPTS) {
+    // A flat opens straight into its hall: no sit-out.
+    const c = evaluateWidth(fr, w, { frame, sb, env, fit: a.fit, trim: a.trim, noSitout: true }, false);
+    if (!best || better(c, best)) best = c;
+    if (badness(best) === 0) break;
+  }
+  const cand = best!;
+  const depths = fitDepths(cand.ground.bands, cand.gExt, d, cand.ground.frozen);
+  const { rooms } = layoutBands(cand.ground.bands, depths, cand.gExt, () => false);
+  const placed = rooms.filter((p) => p.w * p.h > 0.05).map((p) => {
+    let spec: RoomSpec = { ...p.spec, key: `${unit}-${p.spec.key}`, parentKey: p.spec.parentKey && `${unit}-${p.spec.parentKey}` };
+    if (spec.type === "terrace") {
+      // Leftover open space: a balcony on the outside wall, else a light well inside the flat.
+      spec = p.y + p.h > d - 0.05 ? { ...spec, type: "balcony", label: "Balcony" } : { ...spec, label: "Open to Sky" };
+    }
+    return { ...p, spec };
+  });
+  return { placed, cramped: placed.filter((p) => isCramped(p.spec, p.w, p.h)).length };
+}
+
+/**
+ * Apartment building: stilt parking on the ground floor, flats above.
+ * Every floor: front flat(s), then a lobby row with the stair and lift, then back flat(s).
+ */
+function generateApartment(req: Requirements): PlanResult | null {
+  const flats = req.flatsPerFloor ?? 2;
+  const floors = Math.min(6, Math.max(2, req.floors));
+  const r: Requirements = { ...req, floors };
+  const frame = makePlotFrame(r);
+  const base = setbacksFor(frame.pw, frame.pd);
+  // Taller buildings keep wider margins (typical bye-law minimums for G+3 and up).
+  const sb: Setbacks = floors >= 4
+    ? { front: Math.max(base.front, 3), rear: Math.max(base.rear, 1.5), side: Math.max(base.side, 1.5) }
+    : base;
+  const area = buildableRect(frame, sb);
+  const coreW = STAIR_W + LIFT_W;
+  const W = area.w;
+  if (W - coreW < 2.4) return null;
+  const bandD = STAIR_MIN_D;
+  const flatD = Math.min(10, (area.h - bandD) / 2);
+  if (flatD < 5) return null;
+  const nFront = flats >= 3 ? 2 : 1;
+  const nBack = flats - nFront;
+  const x0 = area.x;
+  const y0 = area.y;
+  const cx = x0 + W / 2;
+  const lobbyTop = y0 + flatD;
+  const lobbyBot = lobbyTop + bandD;
+  const house: Rect = { x: x0, y: y0, w: W, h: 2 * flatD + bandD };
+  // Core at the left end of the lobby row: the stair, then the lift above a
+  // small lift lobby; one continuous lobby runs on to the right, so every
+  // flat's front door, the stair and the lift share it.
+  const LIFT_D = 2.0;
+  const lobbyX = x0 + coreW;
+
+  const spec = (key: string, type: RoomSpec["type"], label: string): RoomSpec =>
+    ({ key, type, label, zone: ZONE_OF[type], area: 0, minW: 0.9, minD: 0.9 });
+  const at = (s: RoomSpec, x: number, y: number, w: number, h: number): Placed => ({ spec: s, x, y, w, h });
+  const AISLE = 3.0;
+  const core = (floor: number, ground: boolean): Placed[] => {
+    const rest = x0 + W - lobbyX;
+    // On the stilt floor the far end of the lobby row is the drive aisle to the back bays, when it fits.
+    const aisle = ground && rest - AISLE >= 1.5;
+    const lobbyW = aisle ? rest - AISLE : rest;
+    const out = [
+      at(spec(`core-stair-${floor}`, "stair", "Staircase"), x0, lobbyTop, STAIR_W, bandD),
+      at(spec(`core-lift-${floor}`, "lift", "Lift"), x0 + STAIR_W, lobbyTop, LIFT_W, LIFT_D),
+      at(spec(`core-liftlobby-${floor}`, "corridor", "Lift Lobby"), x0 + STAIR_W, lobbyTop + LIFT_D, LIFT_W, bandD - LIFT_D),
+      at(spec(`core-lobby-${floor}`, "corridor", ground ? "Entrance Lobby" : "Lobby"), lobbyX, lobbyTop, lobbyW, bandD),
+    ];
+    if (aisle) out.push(at(spec(`core-aisle-${floor}`, "parking", "Drive Aisle"), lobbyX + lobbyW, lobbyTop, AISLE, bandD));
+    return out;
+  };
+
+  const units = new Map<string, string>();
+  const floorsPlaced: Placed[][] = [];
+  let cramped = 0;
+  let bays = 0;
+
+  // Stilt floor: car bays across the front and, with a drive aisle, the back.
+  const ground = core(0, true);
+  const aisle = ground.some((p) => p.spec.label === "Drive Aisle");
+  const BAY = 2.7;
+  const zone = (y: number, label: string, cars: boolean): Placed[] => {
+    if (!cars) return [at(spec(`stilt-${label}`, "store", "Utility & Stores"), x0, y, W, flatD)];
+    const n = Math.floor(W / BAY);
+    const out: Placed[] = [];
+    for (let i = 0; i < n; i++) out.push(at(spec(`bay-${label}-${i}`, "parking", `Car ${++bays}`), x0 + i * BAY, y, BAY, flatD));
+    const rest = W - n * BAY;
+    if (rest > 0.05) out.push(at(spec(`bike-${label}`, "parking", "Two-wheelers"), x0 + n * BAY, y, rest, flatD));
+    return out;
+  };
+  ground.push(...zone(y0, "front", true), ...zone(lobbyBot, "back", aisle));
+  floorsPlaced.push(ground);
+
+  for (let f = 1; f < floors; f++) {
+    const placed = core(f, false);
+    let n = 0;
+    for (const [row, count] of [["front", nFront], ["back", nBack]] as const) {
+      for (let i = 0; i < count; i++) {
+        const unit = `${f}${String(++n).padStart(2, "0")}`;
+        const w = W / count;
+        const flat = layoutFlat(r, w, flatD, unit);
+        cramped += flat.cramped;
+        for (const p of flat.placed) {
+          units.set(p.spec.key, unit);
+          // Flat-local x runs along the lobby and the hall sits at its far end,
+          // so it lands on the lobby, clear of the stair and lift at the left.
+          const x = i === 0 ? x0 + p.x : cx + p.x;
+          const y = row === "front" ? lobbyTop - p.y - p.h : lobbyBot + p.y;
+          placed.push({ ...p, x, y });
+        }
+      }
+    }
+    floorsPlaced.push(placed);
+  }
+
+  const placement: Placement = { frame, y0: 0, mirror: false };
+  const floorRooms = floorsPlaced.map((ps) => toRooms(ps, placement).map((room) => ({ ...room, unit: units.get(room.id) })));
+  const homes = flats * (floors - 1);
+  const notes: Suggestion[] = [
+    { kind: "space", severity: "good", message: `${homes} flats of ${req.bedrooms} BHK (${flats} on each of ${floors - 1} floors) around a stair and lift core, with stilt parking below.` },
+    { kind: "space", severity: bays >= homes ? "good" : "warn", message: `${bays} car bays in the stilt parking for ${homes} flats${bays >= homes ? "." : `: short by ${homes - bays}. Plan visitor and two-wheeler parking, or a basement.`}` },
+  ];
+  if (cramped) {
+    notes.push({ kind: "space", severity: "warn", message: `${req.bedrooms} BHK flats are tight at ${flats} per floor on this plot; try fewer flats per floor or fewer bedrooms.` });
+  }
+  return assemble(r, frame, sb, placement, floorRooms, floorsPlaced.map(() => [house]), { porch: true, fit: 1, trim: 0, notes });
 }
 
 const RING_NOTES: Record<RingKind, string> = {
@@ -883,13 +1060,7 @@ function generateShaped(req: Requirements): PlanResult {
     // plots, let rooms grow towards villa proportions.
     // Tight plots trim the program the way Indian plans do (no powder room or
     // stores, then one hall and 4'×7' baths) before shrinking rooms.
-    const attempts: { fit: number; trim: Trim; noSitout: boolean }[] = [
-      { fit: 1, trim: 0, noSitout: false }, { fit: 0.9, trim: 0, noSitout: false },
-      { fit: 1, trim: 1, noSitout: false }, { fit: 0.9, trim: 1, noSitout: false },
-      { fit: 1, trim: 2, noSitout: false }, { fit: 0.9, trim: 2, noSitout: false },
-      { fit: 0.9, trim: 2, noSitout: true }, { fit: 0.8, trim: 2, noSitout: false },
-      { fit: 0.8, trim: 2, noSitout: true }, { fit: 0.72, trim: 2, noSitout: true },
-    ];
+    const attempts = ATTEMPTS;
     let cand: Candidate | null = null;
     let fit = 1;
     let trim: Trim = 0;
@@ -996,7 +1167,7 @@ function assemble(req: Requirements, frame: PlotFrame, sb: Setbacks, placement: 
   if (req.buildingType === "rental" && req.floors > 1) {
     result.suggestions.push({ kind: "circulation", severity: "good", message: `${req.floors} separate ${req.bedrooms} BHK homes, one per floor. The staircase rises from outside at the front, so each home has its own front door.` });
   }
-  if (info.porch) {
+  if (info.porch && req.buildingType !== "apartment") {
     result.suggestions.push({ kind: "space", severity: "info", message: "Cars park in a covered porch at the front of the house, under the floor above." });
   }
   if (info.trim >= 1) {
