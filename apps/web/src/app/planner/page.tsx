@@ -28,6 +28,11 @@ import { exportPDF, exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
 import { planSubtitle, planTitle } from "@/lib/floorplan/units";
 import { ServicesSheet } from "@/components/planner/services-sheet";
+import { ElevationSheet } from "@/components/planner/elevation-sheet";
+import type { RoofStyle } from "@/lib/floorplan/model3d";
+
+/** Cottages and courtyard houses have sloped tiled roofs; everything else a flat RCC roof. */
+const roofFor = (r: Requirements): RoofStyle => (r.buildingType === "cottage" || r.buildingType === "manduva" ? "sloped" : "flat");
 
 type Stage = "choose" | "plot" | "requirements" | "result";
 
@@ -42,7 +47,7 @@ export default function PlannerPage() {
   const [plan, setPlan] = React.useState<PlanResult | null>(null);
   const [active, setActive] = React.useState(0);
   const [editable, setEditable] = React.useState(false);
-  const [view, setView] = React.useState<"plan" | "site" | "services" | "3d">("plan");
+  const [view, setView] = React.useState<"plan" | "site" | "services" | "elevation" | "3d">("plan");
   /** "colour": the rendered presentation plan; "drawing": the architect's sheet. */
   const [style, setStyle] = React.useState<"drawing" | "colour">("drawing");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
@@ -258,7 +263,7 @@ export default function PlannerPage() {
                   label="View"
                   value={view}
                   onChange={setView}
-                  options={[["plan", "Floor plan"], ["site", "Site plan"], ["services", "Services"], ["3d", "3D"]]}
+                  options={[["plan", "Floor plan"], ["site", "Site plan"], ["elevation", "Elevation"], ["services", "Services"], ["3d", "3D"]]}
                 />
                 {(view === "plan" || view === "site") && (
                   <Segmented
@@ -279,7 +284,7 @@ export default function PlannerPage() {
                 <div className="ml-auto flex flex-wrap gap-1">
                   {view !== "3d" && (
                     <>
-                      {view !== "services" && (
+                      {(view === "plan" || view === "site") && (
                         <Button size="sm" variant={editable ? "default" : "ghost"} onClick={() => setEditable((e) => !e)} aria-pressed={editable}>
                           <Pencil /> {editable ? "Editing" : "Edit"}
                         </Button>
@@ -301,7 +306,15 @@ export default function PlannerPage() {
                 </div>
               </div>
 
-              {view === "3d" ? <Plan3D plan={plan} roofStyle={req.buildingType === "cottage" || req.buildingType === "manduva" ? "sloped" : "flat"} /> : view === "services" ? (
+              {view === "elevation" ? (
+              <div ref={canvasWrap}>
+                <ElevationSheet plan={plan} roofStyle={roofFor(req)} meta={{
+                  project: planTitle(req),
+                  subtitle: planSubtitle(req, plan.plotArea),
+                  date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                }} />
+              </div>
+              ) : view === "3d" ? <Plan3D plan={plan} roofStyle={roofFor(req)} /> : view === "services" ? (
               <div ref={canvasWrap}>
                 <ServicesSheet plan={plan} req={req} meta={{
                   project: planTitle(req),
@@ -346,6 +359,11 @@ export default function PlannerPage() {
                       subtitle: `${planSubtitle(req, plan.plotArea)} · Presentation plan`,
                       date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
                     }} />
+                  <ElevationSheet plan={plan} roofStyle={roofFor(req)} meta={{
+                    project: planTitle(req),
+                    subtitle: `${planSubtitle(req, plan.plotArea)} · Front elevation`,
+                    date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                  }} />
                   <ServicesSheet plan={plan} req={req} palette="light" meta={{
                     project: planTitle(req),
                     subtitle: `${planSubtitle(req, plan.plotArea)} · Plumbing & drainage`,

@@ -831,7 +831,7 @@ function dimensionChains(rooms: Room[], fp: { x: number; y: number; w: number; h
   return { top: cuts(top, fp.x, fp.x + fp.w), left: cuts(left, fp.y, fp.y + fp.h) };
 }
 
-export function TitleBlock({ x, y, w, h, s, meta, floorName }: { x: number; y: number; w: number; h: number; s: number; meta?: SheetMeta; floorName: string }) {
+export function TitleBlock({ x, y, w, h, s, meta, floorName, drawing }: { x: number; y: number; w: number; h: number; s: number; meta?: SheetMeta; floorName: string; drawing?: string }) {
   const C = React.useContext(Pal);
   const pad = 0.25 * s;
   const top = y + 0.15 * s;
@@ -841,7 +841,7 @@ export function TitleBlock({ x, y, w, h, s, meta, floorName }: { x: number; y: n
   const value = { fontSize: 0.4 * s, fontWeight: 600 } as const;
   const cells: [string, string][] = [
     ["Project", meta?.project ?? "Residence"],
-    ["Drawing", `${floorName} plan`],
+    ["Drawing", drawing ?? `${floorName} plan`],
     ["Scale", "1:100"],
     ["Date", meta?.date ?? ""],
   ];
