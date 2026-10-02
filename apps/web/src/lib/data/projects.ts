@@ -57,7 +57,12 @@ export interface SavedPlot extends Omit<PlotInput, "points"> {
 }
 
 function fail(error: { message: string } | null): asserts error is null {
-  if (error) throw new Error(error.message);
+  if (!error) return;
+  // Raised by the database when a free account already keeps 3 projects.
+  if (error.message.includes("FREE_PROJECT_LIMIT")) {
+    throw new Error("Free accounts keep 3 projects. Unlock one of them with Pro (₹499) or delete one to start another.");
+  }
+  throw new Error(error.message);
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
@@ -206,3 +211,10 @@ export async function deletePlan(id: string): Promise<void> {
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
+
+/** Projects unlocked with Pro (the signed-in user's own, by row-level security). */
+export async function unlockedProjects(): Promise<Set<string>> {
+  const { data, error } = await supabase().from("project_unlocks").select("project_id");
+  fail(error);
+  return new Set((data ?? []).map((r) => r.project_id as string));
+}

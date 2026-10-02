@@ -41,7 +41,7 @@ const FAQ = [
   { q: "My plot isn't a rectangle. Will it work?", a: "Yes. Draw the real boundary on the map; the house is oriented to the road and its outline steps with the land. Choose “Maximise the plot” for a larger home that follows the shape, or “Balanced” for a compact house with garden around it." },
   { q: "How is Vastu handled?", a: "Each room has a preferred direction (kitchen south-east, master bedroom south-west, pooja north-east…). The engine tries mirrored and reordered layouts and keeps the best score, measured against true north. It's guidance, not a ruling." },
   { q: "Do I need an account?", a: "No — you can generate and explore plans right away. Sign in to save projects and plans and come back to them." },
-  { q: "What does it cost?", a: "Everything on this page is free while we're in early access. A Pro plan with PDF and CAD export and photoreal renders is in the works." },
+  { q: "What does it cost?", a: "Planning is free: unlimited plans, every building type, floor and site plans and the 3D model. Pro is a one-time ₹499 per project and adds the full PDF drawing set, the colour presentation plan, the front elevation and the plumbing & drainage sheet." },
 ];
 
 export default function Landing() {
@@ -80,7 +80,7 @@ export default function Landing() {
               {[
                 ["< 1 s", "to generate"],
                 ["Any", "plot shape"],
-                ["Free", "in early access"],
+                ["Free", "to plan"],
               ].map(([v, l]) => (
                 <div key={l}>
                   <dt className="sr-only">{l}</dt>
@@ -139,32 +139,33 @@ export default function Landing() {
       {/* Pricing — honest about what exists today. */}
       <section id="pricing" className="container py-20">
         <p className="label-mono">Pricing</p>
-        <h2 className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl">Free while we&apos;re in early access.</h2>
+        <h2 className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl">Plan for free. Pay once for the drawing set.</h2>
         <div className="mt-10 grid gap-6 md:grid-cols-2">
           <div className="sheet-marks rounded-lg border bg-card p-7 shadow-sheet">
             <div className="flex items-baseline justify-between">
               <h3 className="font-display text-xl font-bold">Free</h3>
               <span className="font-mono text-3xl font-semibold">₹0</span>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Everything available today.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Everything you need to plan.</p>
             <ul className="mt-6 space-y-2.5 text-sm">
-              {["Unlimited plans and projects", "Plot drawing on the map", "Floor plan, site plan and 3D model", "Plan editor", "SVG and PNG export", "Saved to your account"].map((f) => (
+              {["Unlimited plans", "Houses, duplexes, rental floors, cottages, manduva houses, apartments", "Plot drawing on the map", "Floor plan, site plan and 3D model", "Plan editor, SVG and PNG export", "Save up to 3 projects"].map((f) => (
                 <li key={f} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-primary" /> {f}</li>
               ))}
             </ul>
             <Button asChild className="mt-7 w-full"><Link href="/planner">Start planning</Link></Button>
           </div>
-          <div className="rounded-lg border border-dashed p-7">
+          <div className="rounded-lg border border-primary/40 bg-card p-7 shadow-sheet">
             <div className="flex items-baseline justify-between">
               <h3 className="font-display text-xl font-bold">Pro</h3>
-              <span className="label-mono">Coming soon</span>
+              <span className="font-mono text-3xl font-semibold">₹499<span className="text-sm font-normal text-muted-foreground"> / project</span></span>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">For homeowners going to construction, and for professionals.</p>
-            <ul className="mt-6 space-y-2.5 text-sm text-muted-foreground">
-              {["PDF drawing sets", "DXF export for CAD", "Photoreal exterior and interior renders", "Plan versions and comparisons"].map((f) => (
-                <li key={f} className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-muted-foreground" /> {f}</li>
+            <p className="mt-1 text-sm text-muted-foreground">One payment per project, no subscription. For going to your builder.</p>
+            <ul className="mt-6 space-y-2.5 text-sm">
+              {["Full PDF drawing set: site, every floor, elevation, services", "Colour presentation plan", "Front elevation", "Plumbing & drainage sheet with quantities", "Unlocked projects don't count towards the 3 free"].map((f) => (
+                <li key={f} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-primary" /> {f}</li>
               ))}
             </ul>
+            <Button asChild variant="outline" className="mt-7 w-full"><Link href="/planner">Plan first, unlock when ready</Link></Button>
           </div>
         </div>
       </section>

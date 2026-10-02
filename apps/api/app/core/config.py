@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     # (asymmetric keys, verified against its public JWKS — no shared secret).
     SUPABASE_URL: str = ""
 
+    # Supabase keys for the billing service: the publishable key (public) to
+    # check project ownership as the user, and the service-role key (secret,
+    # server only) to record verified payments.
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+
+    # Razorpay (Pro unlock, one-time per project). Use test-mode keys first.
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    PRO_PRICE_PAISE: int = 49900  # ₹499
+
     # Rate limiting (Redis keeps counters across workers outside dev).
     REDIS_URL: str = "redis://localhost:6379/0"
     RATE_LIMIT: str = "120/minute"
@@ -53,6 +64,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.FRONTEND_ORIGIN.split(",") if o.strip()]
+
+    @property
+    def billing_enabled(self) -> bool:
+        return all([self.RAZORPAY_KEY_ID, self.RAZORPAY_KEY_SECRET, self.SUPABASE_URL,
+                    self.SUPABASE_PUBLISHABLE_KEY, self.SUPABASE_SERVICE_ROLE_KEY])
 
     @property
     def ai_enabled(self) -> bool:
