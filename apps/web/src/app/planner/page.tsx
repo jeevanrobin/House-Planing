@@ -43,6 +43,8 @@ export default function PlannerPage() {
   const [active, setActive] = React.useState(0);
   const [editable, setEditable] = React.useState(false);
   const [view, setView] = React.useState<"plan" | "site" | "services" | "3d">("plan");
+  /** "colour": the rendered presentation plan; "drawing": the architect's sheet. */
+  const [style, setStyle] = React.useState<"drawing" | "colour">("drawing");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
   const [projectId, setProjectId] = React.useState<string | undefined>();
@@ -258,6 +260,14 @@ export default function PlannerPage() {
                   onChange={setView}
                   options={[["plan", "Floor plan"], ["site", "Site plan"], ["services", "Services"], ["3d", "3D"]]}
                 />
+                {(view === "plan" || view === "site") && (
+                  <Segmented
+                    label="Style"
+                    value={style}
+                    onChange={setStyle}
+                    options={[["drawing", "Drawing"], ["colour", "Colour"]]}
+                  />
+                )}
                 {(view === "plan" || view === "site") && plan.floors.length > 1 && (
                   <Segmented
                     label="Floor"
@@ -312,6 +322,7 @@ export default function PlannerPage() {
                   }}
                   view={view}
                   editable={editable}
+                  palette={style === "colour" ? "presentation" : undefined}
                 />
               </div>
               )}
@@ -329,6 +340,12 @@ export default function PlannerPage() {
                         date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
                       }} />
                   ))}
+                  <FloorPlanCanvas floor={plan.floors[0]} site={plan.site} view="plan" palette="presentation"
+                    meta={{
+                      project: planTitle(req),
+                      subtitle: `${planSubtitle(req, plan.plotArea)} · Presentation plan`,
+                      date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                    }} />
                   <ServicesSheet plan={plan} req={req} palette="light" meta={{
                     project: planTitle(req),
                     subtitle: `${planSubtitle(req, plan.plotArea)} · Plumbing & drainage`,
