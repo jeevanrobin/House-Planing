@@ -8,7 +8,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { createProject, deleteProject, listProjects, type ProjectSummary } from "@/lib/data/projects";
+import { createProject, deleteProject, listProjects, unlockedProjects, type ProjectSummary } from "@/lib/data/projects";
 import { useUser } from "@/lib/supabase/use-user";
 
 export default function Dashboard() {
@@ -18,10 +18,13 @@ export default function Dashboard() {
   const [error, setError] = React.useState<string | null>(null);
   const [name, setName] = React.useState("");
   const [creating, setCreating] = React.useState(false);
+  const [pro, setPro] = React.useState<Set<string>>(new Set());
 
   const load = React.useCallback(() => {
     listProjects().then(setProjects).catch((e: Error) => setError(e.message));
+    unlockedProjects().then(setPro).catch(() => setPro(new Set()));
   }, []);
+  const freeUsed = projects ? projects.filter((p) => !pro.has(p.id)).length : 0;
   React.useEffect(() => { if (user) load(); }, [user, load]);
 
   const create = async (e: React.FormEvent) => {
@@ -99,7 +102,10 @@ export default function Dashboard() {
                       <Map className="size-5" />
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate font-medium">{p.name}</span>
+                      <span className="flex items-center gap-2 truncate font-medium">
+                        {p.name}
+                        {pro.has(p.id) && <span className="rounded bg-accent px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase text-accent-foreground">Pro</span>}
+                      </span>
                       <span className="block text-xs text-muted-foreground">
                         {p.plot ? `${Math.round(p.plot.areaSqm * 10.764).toLocaleString("en-IN")} sq ft · ${p.plot.facing}-facing` : "No plot yet"}
                         {" · "}{p.planCount} plan{p.planCount === 1 ? "" : "s"} · Updated {relative(p.updatedAt)}
@@ -119,7 +125,13 @@ export default function Dashboard() {
             <CardHeader><CardTitle>Plan</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
               <p className="font-display text-xl font-bold">Free</p>
-              <p className="text-muted-foreground">Unlimited plans while we&apos;re in early access. Pro (PDF/CAD export, 3D views and renders) is coming soon.</p>
+              <p className="text-muted-foreground">
+                {Math.min(freeUsed, 3)} of 3 free projects used. Unlimited plans in each.
+              </p>
+              <p className="text-muted-foreground">
+                <b className="text-foreground">Pro · ₹499 per project</b>, once: the PDF drawing set, colour plan, front elevation and
+                plumbing &amp; drainage sheet. Unlock from any Pro sheet in the planner.
+              </p>
             </CardContent>
           </Card>
         </div>

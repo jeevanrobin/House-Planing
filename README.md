@@ -38,7 +38,9 @@ architect's sheet, saved to your account.
 ### 1. Supabase (accounts and data)
 
 1. In your Supabase project, open **SQL Editor → New query**, paste
-   [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) and **Run**.
+   [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) and **Run**;
+   then the same for [`0002_billing.sql`](supabase/migrations/0002_billing.sql) (Pro unlocks
+   and the 3-free-projects limit).
 2. **Authentication → URL Configuration**: set *Site URL* to your app's URL
    (`http://localhost:3100` for local work) and add `http://localhost:3100/auth/callback`
    (plus your production `/auth/callback`) to *Redirect URLs*.
@@ -58,7 +60,7 @@ npm run dev          # http://localhost:3100
 
 The planner works without Supabase or a Maps key; signing in and saving need Supabase.
 
-### 3. API (optional — AI critique)
+### 3. API (payments; optional AI critique)
 
 ```bash
 cd apps/api
@@ -68,7 +70,27 @@ uvicorn app.main:app --reload                       # http://localhost:8000/docs
 ```
 
 Set `SUPABASE_URL` so the API can verify sign-ins. Any `ENV` other than `development`
-is treated as production and refuses to start without it.
+is treated as production and refuses to start without it. Point the web app at it with
+`NEXT_PUBLIC_API_URL=http://localhost:8000` in `apps/web/.env.local`.
+
+#### Payments (Pro: ₹499 per project, one-time)
+
+Pro unlocks the PDF drawing set, the colour presentation plan, the front elevation and the
+plumbing & drainage sheet for one project; free accounts keep 3 projects.
+
+1. In the Razorpay dashboard switch to **Test mode** → **Account & Settings → API keys** →
+   generate a key.
+2. In the **API's** environment (`.env` at the repo root or `apps/api/.env`, never the web
+   app) set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `SUPABASE_PUBLISHABLE_KEY` and
+   `SUPABASE_SERVICE_ROLE_KEY` (Supabase → Settings → API keys → *secret* key).
+3. Restart the API; `GET /api/v1/billing/config` reports `"enabled": true`.
+4. In the planner, save a plan to a project, open **Elevation** and unlock with a
+   [Razorpay test card or UPI ID](https://razorpay.com/docs/payments/payments/test-card-details/).
+
+The API creates each order and verifies Razorpay's payment signature (and that the order
+was made for that project, user and price) before recording the unlock with the
+service-role key; the browser never decides that a payment succeeded. Unlocks are readable
+only by their owner (row-level security). Switch to live keys only after KYC and a test run.
 
 ### Docker
 
@@ -106,6 +128,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more.
 
 ## Roadmap
 
-1. 3D view of the generated plan.
-2. Premium redesign of every page; Free / Pro plans.
-3. PDF and DXF (CAD) export; photoreal renders.
+- Done: shape-aware engine, Indian plot conventions, building types (house, duplex, rental
+  floors, cottage, manduva, apartment), 3D with roofs, colour plan, front elevation,
+  plumbing & drainage sheet, PDF drawing set, Pro unlock with Razorpay.
+- Next: DXF (CAD) export; photoreal renders; Razorpay webhook for payments confirmed after
+  the browser closes.

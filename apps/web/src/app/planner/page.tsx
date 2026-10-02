@@ -29,6 +29,8 @@ import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types
 import { planSubtitle, planTitle } from "@/lib/floorplan/units";
 import { ServicesSheet } from "@/components/planner/services-sheet";
 import { ElevationSheet } from "@/components/planner/elevation-sheet";
+import { ProGate } from "@/components/planner/pro-gate";
+import { isUnlocked } from "@/lib/billing";
 import type { RoofStyle } from "@/lib/floorplan/model3d";
 
 /** Cottages and courtyard houses have sloped tiled roofs; everything else a flat RCC roof. */
@@ -53,6 +55,15 @@ export default function PlannerPage() {
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
   const [projectId, setProjectId] = React.useState<string | undefined>();
+  /** Pro unlocked for this project; and the Pro feature the user just asked for, if locked. */
+  const [unlocked, setUnlocked] = React.useState(false);
+  const [gate, setGate] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    isUnlocked(projectId).then((u) => { if (live) setUnlocked(u); });
+    return () => { live = false; };
+  }, [projectId]);
+  React.useEffect(() => setGate(null), [unlocked]);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const canvasWrap = React.useRef<HTMLDivElement>(null);
   const printWrap = React.useRef<HTMLDivElement>(null);
@@ -262,14 +273,14 @@ export default function PlannerPage() {
                 <Segmented
                   label="View"
                   value={view}
-                  onChange={setView}
+                  onChange={(v) => { setGate(null); setView(v); }}
                   options={[["plan", "Floor plan"], ["site", "Site plan"], ["elevation", "Elevation"], ["services", "Services"], ["3d", "3D"]]}
                 />
                 {(view === "plan" || view === "site") && (
                   <Segmented
                     label="Style"
                     value={style}
-                    onChange={setStyle}
+                    onChange={(v) => { setGate(null); setStyle(v); }}
                     options={[["drawing", "Drawing"], ["colour", "Colour"]]}
                   />
                 )}
@@ -295,7 +306,7 @@ export default function PlannerPage() {
                       <Button size="sm" variant="ghost" onClick={() => { const s = getSVG(); if (s) exportPNG(s, `floor-${active}`); }}>
                         <FileImage /> PNG
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setPrinting(true)} disabled={printing}>
+                      <Button size="sm" variant="ghost" onClick={() => (unlocked ? setPrinting(true) : setGate("The PDF drawing set"))} disabled={printing}>
                         <FileDown /> {printing ? "Preparing…" : "PDF set"}
                       </Button>
                     </>
@@ -306,7 +317,13 @@ export default function PlannerPage() {
                 </div>
               </div>
 
-              {view === "elevation" ? (
+              {(() => {
+                const locked = gate ?? (unlocked ? null
+                  : view === "elevation" ? "The front elevation"
+                    : view === "services" ? "The plumbing & drainage sheet"
+                      : (view === "plan" || view === "site") && style === "colour" ? "The colour presentation plan" : null);
+                return locked ? <ProGate feature={locked} projectId={projectId} onUnlocked={() => setUnlocked(true)} /> : null;
+              })() ?? (view === "elevation" ? (
               <div ref={canvasWrap}>
                 <ElevationSheet plan={plan} roofStyle={roofFor(req)} meta={{
                   project: planTitle(req),
@@ -338,7 +355,7 @@ export default function PlannerPage() {
                   palette={style === "colour" ? "presentation" : undefined}
                 />
               </div>
-              )}
+              ))}
 
               {(view === "plan" || view === "site") && <PlanLegend />}
 
@@ -420,7 +437,7 @@ export default function PlannerPage() {
                 </CardContent>
               </Card>
 
-              <SavePlan req={req} plan={plan} vastu={planVastuScore(plan)} projectId={projectId} />
+              <SavePlan req={req} plan={plan} vastu={planVastuScore(plan)} projectId={projectId} onSaved={setProjectId} />
             </aside>
           </div>
         )}

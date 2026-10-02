@@ -13,7 +13,11 @@ export const PENDING_KEY = "pendingPlanRequirements";
 const NEW = "__new__";
 
 /** Save the current plan into one of the user's projects (or a new one). */
-export function SavePlan({ req, plan, vastu, projectId }: { req: Requirements; plan: PlanResult; vastu: number; projectId?: string }) {
+export function SavePlan({ req, plan, vastu, projectId, onSaved }: {
+  req: Requirements; plan: PlanResult; vastu: number; projectId?: string;
+  /** Called with the project the plan was saved to. */
+  onSaved?: (projectId: string) => void;
+}) {
   const user = useUser();
   const [projects, setProjects] = React.useState<ProjectSummary[] | null>(null);
   const [target, setTarget] = React.useState<string>(projectId ?? "");
@@ -51,6 +55,7 @@ export function SavePlan({ req, plan, vastu, projectId }: { req: Requirements; p
     try {
       const pid = target === NEW || !target ? await createProject(newName || "My home") : target;
       await savePlan(pid, name || "Plan", req, plan, vastu);
+      onSaved?.(pid);
       setState({ s: "saved", project: pid });
     } catch (err) {
       setState({ s: "error", msg: (err as Error).message });
