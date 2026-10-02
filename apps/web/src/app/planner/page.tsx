@@ -27,6 +27,7 @@ import { readHandoff } from "@/lib/data/handoff";
 import { exportPDF, exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
 import { planSubtitle, planTitle } from "@/lib/floorplan/units";
+import { ServicesSheet } from "@/components/planner/services-sheet";
 
 type Stage = "choose" | "plot" | "requirements" | "result";
 
@@ -41,7 +42,7 @@ export default function PlannerPage() {
   const [plan, setPlan] = React.useState<PlanResult | null>(null);
   const [active, setActive] = React.useState(0);
   const [editable, setEditable] = React.useState(false);
-  const [view, setView] = React.useState<"plan" | "site" | "3d">("plan");
+  const [view, setView] = React.useState<"plan" | "site" | "services" | "3d">("plan");
   const [reqInit, setReqInit] = React.useState<Partial<Requirements> | undefined>();
   const [showUnsafePlan, setShowUnsafePlan] = React.useState(false);
   const [projectId, setProjectId] = React.useState<string | undefined>();
@@ -255,9 +256,9 @@ export default function PlannerPage() {
                   label="View"
                   value={view}
                   onChange={setView}
-                  options={[["plan", "Floor plan"], ["site", "Site plan"], ["3d", "3D"]]}
+                  options={[["plan", "Floor plan"], ["site", "Site plan"], ["services", "Services"], ["3d", "3D"]]}
                 />
-                {view !== "3d" && plan.floors.length > 1 && (
+                {(view === "plan" || view === "site") && plan.floors.length > 1 && (
                   <Segmented
                     label="Floor"
                     value={String(active)}
@@ -268,9 +269,11 @@ export default function PlannerPage() {
                 <div className="ml-auto flex flex-wrap gap-1">
                   {view !== "3d" && (
                     <>
-                      <Button size="sm" variant={editable ? "default" : "ghost"} onClick={() => setEditable((e) => !e)} aria-pressed={editable}>
-                        <Pencil /> {editable ? "Editing" : "Edit"}
-                      </Button>
+                      {view !== "services" && (
+                        <Button size="sm" variant={editable ? "default" : "ghost"} onClick={() => setEditable((e) => !e)} aria-pressed={editable}>
+                          <Pencil /> {editable ? "Editing" : "Edit"}
+                        </Button>
+                      )}
                       <Button size="sm" variant="ghost" onClick={() => { const s = getSVG(); if (s) exportSVG(s, `floor-${active}`); }}>
                         <FileCode2 /> SVG
                       </Button>
@@ -288,7 +291,15 @@ export default function PlannerPage() {
                 </div>
               </div>
 
-              {view === "3d" ? <Plan3D plan={plan} /> : (
+              {view === "3d" ? <Plan3D plan={plan} /> : view === "services" ? (
+              <div ref={canvasWrap}>
+                <ServicesSheet plan={plan} req={req} meta={{
+                  project: planTitle(req),
+                  subtitle: planSubtitle(req, plan.plotArea),
+                  date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                }} />
+              </div>
+              ) : (
               <div ref={canvasWrap}>
                 <FloorPlanCanvas
                   key={`${active}-${editable}`}
@@ -305,7 +316,7 @@ export default function PlannerPage() {
               </div>
               )}
 
-              {view !== "3d" && <PlanLegend />}
+              {(view === "plan" || view === "site") && <PlanLegend />}
 
               {/* Offscreen sheets for the PDF drawing set (light palette for printing). */}
               {printing && (
@@ -318,6 +329,11 @@ export default function PlannerPage() {
                         date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
                       }} />
                   ))}
+                  <ServicesSheet plan={plan} req={req} palette="light" meta={{
+                    project: planTitle(req),
+                    subtitle: `${planSubtitle(req, plan.plotArea)} · Plumbing & drainage`,
+                    date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+                  }} />
                 </div>
               )}
             </div>

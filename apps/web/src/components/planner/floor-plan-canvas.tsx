@@ -12,9 +12,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ftIn } from "@/lib/floorplan/units";
 
-const PAD = 2.2; // metres of margin around the plot
+export const PAD = 2.2; // metres of margin around the plot
 /** Drawing palettes: trace paper (light) and blueprint (dark). Concrete colours, so exports are self-contained. */
-const LIGHT = {
+export const LIGHT = {
   paper: "#F7F6F2",
   sheet: "#FFFFFF",
   ground: "#EEEDE6",
@@ -42,8 +42,8 @@ const LIGHT = {
   accent: "#2A4BD7",
   shadow: "rgba(0,0,0,0.07)",
 };
-type Palette = typeof LIGHT;
-const BLUEPRINT: Palette = {
+export type Palette = typeof LIGHT;
+export const BLUEPRINT: Palette = {
   paper: "#0F2240",
   sheet: "#12284A",
   ground: "#14294B",
@@ -71,7 +71,7 @@ const BLUEPRINT: Palette = {
   accent: "#7CC4FF",
   shadow: "rgba(0,0,0,0)",
 };
-const Pal = React.createContext<Palette>(LIGHT);
+export const Pal = React.createContext<Palette>(LIGHT);
 
 /** Key to the drawing's fills, in the current theme's palette. */
 export function PlanLegend() {
@@ -699,7 +699,7 @@ function dimensionChains(rooms: Room[], fp: { x: number; y: number; w: number; h
   return { top: cuts(top, fp.x, fp.x + fp.w), left: cuts(left, fp.y, fp.y + fp.h) };
 }
 
-function TitleBlock({ x, y, w, h, s, meta, floorName }: { x: number; y: number; w: number; h: number; s: number; meta?: SheetMeta; floorName: string }) {
+export function TitleBlock({ x, y, w, h, s, meta, floorName }: { x: number; y: number; w: number; h: number; s: number; meta?: SheetMeta; floorName: string }) {
   const C = React.useContext(Pal);
   const pad = 0.25 * s;
   const top = y + 0.15 * s;

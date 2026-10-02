@@ -290,6 +290,8 @@ export function RequirementWizard({
               <Toggle label="Garden / lawn" desc="Reserve outdoor green space" checked={req.garden} onChange={(v) => set("garden", v)} />
               <Toggle label="Swimming pool" desc="Add a pool to the plan" checked={req.pool} onChange={(v) => set("pool", v)} />
               <Toggle label="Home office" desc="Dedicated work room" checked={req.homeOffice} onChange={(v) => set("homeOffice", v)} />
+              <Toggle label="No sewer line" desc="Plan a septic tank and soak pit" checked={req.drainage === "septic"}
+                onChange={(v) => set("drainage", v ? "septic" : "sewer")} />
             </div>
           )}
 

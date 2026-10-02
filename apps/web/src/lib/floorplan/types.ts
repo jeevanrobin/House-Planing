@@ -69,6 +69,8 @@ export interface Requirements {
   buildingType?: BuildingType;
   /** Apartments: flats on each residential floor. */
   flatsPerFloor?: 2 | 3 | 4;
+  /** Where the drains go: the municipal sewer (default) or a septic tank and soak pit. */
+  drainage?: "sewer" | "septic";
 
   // Step 2
   bedrooms: number;
