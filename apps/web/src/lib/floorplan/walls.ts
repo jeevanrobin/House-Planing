@@ -71,14 +71,21 @@ interface Line {
   lowOpen: Interval[];
   highSolid: Interval[];
   highOpen: Interval[];
+  /** Verandahs (passages) and open courtyards: where they meet, the verandah is open between pillars. */
+  lowVer: Interval[];
+  highVer: Interval[];
+  lowCourt: Interval[];
+  highCourt: Interval[];
 }
+
+const isCourtyard = (r: Room) => r.type === "terrace" && /courtyard/i.test(r.label);
 
 function collect(rooms: Room[]) {
   const lines = { v: new Map<number, Line>(), h: new Map<number, Line>() };
   const get = (o: "v" | "h", at: number) => {
     const k = keyOf(at);
     let l = lines[o].get(k);
-    if (!l) { l = { lowSolid: [], lowOpen: [], highSolid: [], highOpen: [] }; lines[o].set(k, l); }
+    if (!l) { l = { lowSolid: [], lowOpen: [], highSolid: [], highOpen: [], lowVer: [], highVer: [], lowCourt: [], highCourt: [] }; lines[o].set(k, l); }
     return l;
   };
   for (const r of rooms) {
@@ -87,6 +94,8 @@ function collect(rooms: Room[]) {
       if (b - a < EPS) return;
       const l = get(o, at);
       (side === "low" ? (open ? l.lowOpen : l.lowSolid) : (open ? l.highOpen : l.highSolid)).push({ a, b });
+      if (r.type === "corridor") (side === "low" ? l.lowVer : l.highVer).push({ a, b });
+      if (isCourtyard(r)) (side === "low" ? l.lowCourt : l.highCourt).push({ a, b });
     };
     add("v", r.x, "high", r.y, r.y + r.h);
     add("v", r.x + r.w, "low", r.y, r.y + r.h);
@@ -101,7 +110,9 @@ function collect(rooms: Room[]) {
  * outline. Each stretch of a wall line is classified by what lies on its two
  * sides: room | room → partition; room | nothing → outer wall; open room
  * (sit-out, balcony…) | nothing → railing; room | open room → outer wall
- * (the facade facing the sit-out); open | open → nothing.
+ * (the facade facing the sit-out); open | open → nothing. A verandah meeting
+ * an open courtyard is the exception: it stays open (a railing / ledge line
+ * between pillars), as round a manduva.
  */
 export function generateWalls(rooms: Room[]): Wall[] {
   const walls: Wall[] = [];
@@ -115,7 +126,9 @@ export function generateWalls(rooms: Room[]): Wall[] {
       const low = merge([...lowS, ...lowO]);
       const high = merge([...highS, ...highO]);
       for (const iv of intersect(lowS, highS)) walls.push(wall(o, at, iv, "interior"));
-      for (const iv of merge([...intersect(lowS, highO), ...intersect(lowO, highS)])) walls.push(wall(o, at, iv, "exterior"));
+      const verandah = merge([...intersect(merge(l.lowVer), merge(l.highCourt)), ...intersect(merge(l.lowCourt), merge(l.highVer))]);
+      for (const iv of verandah) walls.push(wall(o, at, iv, "railing"));
+      for (const iv of subtract(merge([...intersect(lowS, highO), ...intersect(lowO, highS)]), verandah)) walls.push(wall(o, at, iv, "exterior"));
       for (const iv of merge([...subtract(lowS, high), ...subtract(highS, low)])) walls.push(wall(o, at, iv, "exterior"));
       for (const iv of merge([...subtract(lowO, high), ...subtract(highO, low)])) walls.push(wall(o, at, iv, "railing"));
     }

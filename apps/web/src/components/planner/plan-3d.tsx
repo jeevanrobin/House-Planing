@@ -7,7 +7,7 @@ import { OrbitControls } from "@react-three/drei";
 import { useTheme } from "next-themes";
 import { Download, Home, Layers, RotateCcw, Sofa } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { buildModel, FLOOR_H, type Material, type Model3D } from "@/lib/floorplan/model3d";
+import { buildModel, FLOOR_H, type Material, type Model3D, type RoofStyle } from "@/lib/floorplan/model3d";
 import type { PlanResult } from "@/lib/floorplan/types";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +32,8 @@ const COLORS: Record<Material, { color: string; roughness?: number; opacity?: nu
   trunk: { color: "#6E5038", roughness: 0.9 },
   leaves: { color: "#5E8F4E", roughness: 0.9 },
   ground: { color: "#D8D2C2", roughness: 1 },
+  tile: { color: "#B4563C", roughness: 0.85 }, // Mangalore clay tiles
+  pillar: { color: "#7A4E2D", roughness: 0.7 }, // teak
 };
 
 const unitBox = new THREE.BoxGeometry(1, 1, 1);
@@ -45,6 +47,8 @@ function useMaterials() {
       out[k] = new THREE.MeshStandardMaterial({
         color: v.color, roughness: v.roughness ?? 0.8, metalness: v.metalness ?? 0,
         transparent: v.opacity !== undefined, opacity: v.opacity ?? 1,
+        // Roof meshes are single surfaces: show both faces.
+        side: k === "tile" ? THREE.DoubleSide : THREE.FrontSide,
       });
     }
     return out;
@@ -53,19 +57,23 @@ function useMaterials() {
 
 interface Props {
   plan: PlanResult;
+  /** Starting roof style: sloped tiles suit cottages and courtyard houses. */
+  roofStyle?: RoofStyle;
   className?: string;
 }
 
-export function Plan3D({ plan, className }: Props) {
+export function Plan3D({ plan, roofStyle: initialRoof = "flat", className }: Props) {
   const { resolvedTheme } = useTheme();
   const [upTo, setUpTo] = React.useState(plan.floors.length - 1);
   const [roof, setRoof] = React.useState(false);
   const [furniture, setFurniture] = React.useState(true);
+  const [roofStyle, setRoofStyle] = React.useState<RoofStyle>(initialRoof);
   const [resetKey, setResetKey] = React.useState(0);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
-  const model = React.useMemo(() => buildModel(plan, { furniture }), [plan, furniture]);
+  const model = React.useMemo(() => buildModel(plan, { furniture, roofStyle }), [plan, furniture, roofStyle]);
 
   React.useEffect(() => setUpTo(plan.floors.length - 1), [plan]);
+  React.useEffect(() => setRoofStyle(initialRoof), [initialRoof]);
 
   const download = () => {
     const url = canvasRef.current?.toDataURL("image/png");
@@ -103,6 +111,16 @@ export function Plan3D({ plan, className }: Props) {
           ))}
         </div>
         <Toggle on={roof} onClick={() => setRoof((v) => !v)} icon={<Home className="size-3.5" />} label="Roof" />
+        {roof && (
+          <div className="flex items-center gap-0.5 rounded-md border bg-card/90 p-0.5 text-xs shadow-sheet backdrop-blur" role="group" aria-label="Roof style">
+            {(["flat", "sloped"] as const).map((v) => (
+              <button key={v} type="button" onClick={() => setRoofStyle(v)} aria-pressed={roofStyle === v}
+                className={cn("rounded px-2 py-1 font-medium capitalize transition-colors", roofStyle === v ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground")}>
+                {v === "flat" ? "Flat RCC" : "Sloped tiles"}
+              </button>
+            ))}
+          </div>
+        )}
         <Toggle on={furniture} onClick={() => setFurniture((v) => !v)} icon={<Sofa className="size-3.5" />} label="Furniture" />
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant="glass" onClick={() => setResetKey((k) => k + 1)} aria-label="Reset view"><RotateCcw /></Button>
@@ -152,6 +170,13 @@ function Scene({ model, plan, upTo, roof }: { model: Model3D; plan: PlanResult; 
   const visible = model.boxes.filter((b) =>
     b.kind === "site" || (b.floor <= upTo && (b.kind !== "roof" || (roof && b.floor === upTo))));
   const rounds = model.rounds.filter((s) => s.kind === "site" || s.floor <= upTo);
+  const meshes = model.meshes.filter((m) => roof && m.floor === upTo);
+  const geoms = React.useMemo(() => model.meshes.map((m) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(m.positions, 3));
+    g.computeVertexNormals();
+    return g;
+  }), [model.meshes]);
 
   return (
     <>
@@ -178,6 +203,9 @@ function Scene({ model, plan, upTo, roof }: { model: Model3D; plan: PlanResult; 
       {visible.map((b, i) => (
         <mesh key={i} geometry={unitBox} material={mats[b.material]} position={[b.x, b.y, b.z]} scale={[b.sx, b.sy, b.sz]}
           castShadow={b.kind !== "glass" && b.kind !== "floor"} receiveShadow />
+      ))}
+      {meshes.map((m) => (
+        <mesh key={`m${model.meshes.indexOf(m)}`} geometry={geoms[model.meshes.indexOf(m)]} material={mats[m.material]} castShadow receiveShadow />
       ))}
       {rounds.map((s, i) => (
         <mesh key={`r${i}`} geometry={s.shape === "sphere" ? unitSphere : unitCyl} material={mats[s.material]}
