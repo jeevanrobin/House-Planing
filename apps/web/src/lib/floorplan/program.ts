@@ -84,6 +84,7 @@ const CATALOG: Record<string, [number, number, number]> = {
   compact_bath: [2.6, 1.2, 2.1],
   hall: [17, 3.3, 3.6],
   kitchen_dining: [12, 2.4, 2.7],
+  compact_master: [14, 3.0, 3.0],
 };
 
 /**
@@ -179,18 +180,23 @@ export function balconiesPerFloor(total: number, floors: number): number[] {
 
 /** Bedroom units (bedroom + ensuite column) and common baths for one floor. */
 function privateUnits(req: Requirements, floor: number, s: number, trim: Trim = 0): Unit[] {
-  const perFloor = bedroomsPerFloor(req.bedrooms, req.floors, trim < 2);
+  const rental = req.buildingType === "rental";
+  // Duplex: bedrooms upstairs, a ground-floor guest room only in 4+ BHK homes.
+  const groundBed = trim < 2 && (req.buildingType === "duplex" ? req.bedrooms >= 4 : true);
+  const perFloor = rental ? new Array(req.floors).fill(req.bedrooms) : bedroomsPerFloor(req.bedrooms, req.floors, groundBed);
   const beds = perFloor[floor] ?? 0;
-  let baths = bathroomsPerFloor(req.bathrooms, req.floors, perFloor)[floor] ?? 0;
-  const masterFloor = req.floors > 1 ? 1 : 0;
+  let baths = rental ? req.bathrooms : bathroomsPerFloor(req.bathrooms, req.floors, perFloor)[floor] ?? 0;
+  // Each rental floor is its own home with its own master bedroom.
+  const masterFloor = rental ? floor : req.floors > 1 ? 1 : 0;
   const units: Unit[] = [];
-  // Number bedrooms across the whole house (the master is not numbered).
+  // Number bedrooms across the whole house (the master is not numbered); rental floors start again.
   let n = 1;
-  for (let f = 0; f < floor; f++) n += perFloor[f] - (f === masterFloor && req.bedrooms > 1 ? 1 : 0);
+  if (!rental) for (let f = 0; f < floor; f++) n += perFloor[f] - (f === masterFloor && req.bedrooms > 1 ? 1 : 0);
   for (let b = 0; b < beds; b++) {
     const master = floor === masterFloor && b === 0 && req.bedrooms > 1;
     const bed = master
-      ? room("master_bedroom", "Master Bedroom", s)
+      // Compact plans: a 10 ft master (standard bedroom size) keeps its bath beside it.
+      ? room("master_bedroom", "Master Bedroom", s, trim >= 2 ? "compact_master" : "master_bedroom")
       : room("bedroom", `Bedroom ${n++}`, s);
     if (baths > 0) {
       baths -= 1;
@@ -204,7 +210,7 @@ function privateUnits(req: Requirements, floor: number, s: number, trim: Trim = 
   for (let i = 0; i < baths; i++) {
     units.push({ cols: [{ rooms: [room("bathroom", "Common Bath", s, trim >= 2 ? "compact_bath" : "bathroom")] }] });
   }
-  if (floor > 0 && req.homeOffice && floor === 1) {
+  if (!rental && floor > 0 && req.homeOffice && floor === 1) {
     units.push(single(room("office", "Home Office", s)));
   }
   return units;
@@ -246,6 +252,10 @@ export function groundProgram(req: Requirements, porch = false, fit = 1, trim: T
       ? { cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: STAIR_W_NARROW }], pin: "end" as const }
       : livingFront ? single(living, "end") : single(room("sitout", "Sit-out", s));
     bands.push({ kind: "sitout", units: [...cars, beside], fixedD: PORCH_D, minD: PORCH_D, maxD: PORCH_D });
+  } else if (stairFront) {
+    // Rental floors: the stair to the upper homes rises beside the sit-out, from outside.
+    const stair = { cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: stairW }], pin: "end" as const };
+    bands.push({ kind: "sitout", units: [single(room("sitout", "Sit-out", s)), stair], fixedD: STAIR_MIN_D, minD: STAIR_MIN_D, maxD: STAIR_MIN_D });
   } else {
     bands.push({ kind: "sitout", units: [single(room("sitout", "Sit-out", s))], fixedD: SITOUT_D, minD: SITOUT_D, maxD: SITOUT_D });
   }
@@ -276,11 +286,11 @@ export function groundProgram(req: Requirements, porch = false, fit = 1, trim: T
   svc.push(...poojaUnits);
   // Guest powder room near the entrance (off the living room, never the
   // kitchen) — only when the bedrooms and their baths are upstairs.
-  if (req.floors > 1 && trim < 1) {
+  if (req.floors > 1 && trim < 1 && req.buildingType !== "rental") {
     pub.push({ cols: [{ rooms: [room("toilet", "Powder Room", s), room("store", "Store", s, "store", { optional: true })] }], pin: "end" });
   }
   let stairBand = -1;
-  if (stairFront && porch) stairBand = 0;
+  if (stairFront && req.floors > 1) stairBand = 0;
   else if (req.floors > 1) {
     svc.push({ cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: stairW }], pin: "end" });
   }
@@ -289,6 +299,24 @@ export function groundProgram(req: Requirements, porch = false, fit = 1, trim: T
   if (req.floors > 1 && stairBand < 0) stairBand = bands.length - 1;
 
   return { bands, stairBand, privateUnits: privateUnits(req, 0, s, trim) };
+}
+
+/**
+ * Rental upper floor: a complete home — hall, kitchen, bedrooms — entered
+ * from the stair at the front. Same rooms as the ground-floor home, without
+ * the stair band (the upper floor builds its own beside the stair).
+ */
+export function rentalUpperProgram(req: Requirements, floor: number, fit = 1, trim: Trim = 0): FloorProgram {
+  const g = groundProgram(req, false, fit, trim, true, false);
+  const tag = (u: Unit): Unit => ({
+    ...u,
+    cols: u.cols.map((c) => ({ ...c, rooms: c.rooms.map((r) => ({ ...r, key: `f${floor}-${r.key}`, parentKey: r.parentKey && `f${floor}-${r.parentKey}` })) })),
+  });
+  return {
+    bands: g.bands.slice(1).map((b) => ({ ...b, units: b.units.map(tag) })),
+    stairBand: -1,
+    privateUnits: g.privateUnits.map(tag),
+  };
 }
 
 /** Upper floor: [balcony] → bedrooms → lounge + stair → [corridor → bedrooms] → [terrace]. */

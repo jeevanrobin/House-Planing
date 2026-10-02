@@ -5,7 +5,7 @@
  * the passage, ensuites from their bedroom, kitchen from dining, …). Windows
  * go on exterior walls of habitable and wet rooms.
  */
-import type { Door, Rect, Room, RoomType, WindowMark } from "./types";
+import type { Door, FloorAccess, Rect, Room, RoomType, WindowMark } from "./types";
 import { exteriorEdges } from "./walls";
 
 const EPS = 0.02;
@@ -105,8 +105,10 @@ function edgeAsShared(r: Rect, side: "top" | "bottom" | "left" | "right", iv: { 
   }
 }
 
-export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | "W" = "N"): { doors: Door[]; windows: WindowMark[] } {
+export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | "W" = "N", access?: FloorAccess): { doors: Door[]; windows: WindowMark[] } {
   const doors: Door[] = [];
+  // Separate homes: the ground-floor stair belongs to the outside, never to the home beside it.
+  const sealedStair = (t: RoomType) => access === "stairOutside" && t === "stair";
   const windows: WindowMark[] = [];
   const byId = new Map(rooms.map((r) => [r.id, r]));
   const neighbours = (r: Room) =>
@@ -132,6 +134,21 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
       continue;
     }
 
+    if (r.type === "living" && access === "fromStair") {
+      // An upper home's front door opens off the stair landing.
+      const st = ns.find((n) => n.o.type === "stair" && n.s.hi - n.s.lo >= 1.0);
+      const d = st && makeDoor(r, st.o, st.s, "main", 1.0);
+      if (d) { doors.push(d); link(r, st!.o); }
+      continue;
+    }
+    // Upper home: the stair is joined only by the front door (made from the living room's side).
+    if (r.type === "stair" && access === "fromStair" && ns.some((n) => n.o.type === "living")) continue;
+    if (r.type === "stair" && access === "stairOutside") {
+      const out = ns.find((n) => (n.o.type === "sitout" || n.o.type === "parking") && n.s.hi - n.s.lo >= 0.9);
+      const d = out && makeDoor(r, out.o, out.s, "door", 1.0);
+      if (d) { doors.push(d); link(r, out!.o); }
+      continue;
+    }
     if (r.type === "living") {
       const sit = ns.find((n) => n.o.type === "sitout" && n.s.hi - n.s.lo >= 1.3)
         ?? ns.find((n) => n.o.type === "parking" && n.s.hi - n.s.lo >= 1.3);
@@ -161,7 +178,7 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
       }
     }
 
-    const prefs = ACCESS[r.type] ?? [];
+    const prefs = (ACCESS[r.type] ?? []).filter((t) => !sealedStair(t));
     let connected = r.type === "living" ? false : ns.some((n) => isLinked(r, n.o) && prefs.includes(n.o.type));
     for (const t of prefs) {
       if (connected) break;
@@ -176,7 +193,7 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
     if (r.type === "living") continue;
     // Last resort so no room is sealed off: the longest wall to any indoor room.
     if (!connected && !ns.some((n) => isLinked(r, n.o))) {
-      const n = ns.filter((x) => !OUTDOOR.includes(x.o.type) && !x.o.parentId && !forbidden(r.type, x.o.type))
+      const n = ns.filter((x) => !OUTDOOR.includes(x.o.type) && !x.o.parentId && !forbidden(r.type, x.o.type) && !sealedStair(x.o.type))
         .sort((a, b) => (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
       if (n) {
         const d = makeDoor(r, n.o, n.s, "door", doorWidth(r.type, "door", 0));
@@ -204,7 +221,7 @@ export function placeOpenings(rooms: Room[], _fp: Rect, road: "N" | "E" | "S" | 
     for (const r of rooms) {
       if (reached.has(r.id) || r.type === "balcony" || (OUTDOOR.includes(r.type) && r.type !== "terrace")) continue;
       const via = neighbours(r)
-        .filter((n) => reached.has(n.o.id) && PASS.includes(n.o.type) && !forbidden(r.type, n.o.type) && n.s.hi - n.s.lo >= 0.8)
+        .filter((n) => reached.has(n.o.id) && PASS.includes(n.o.type) && !forbidden(r.type, n.o.type) && !sealedStair(n.o.type) && n.s.hi - n.s.lo >= 0.8)
         .sort((a, b) => PASS.indexOf(a.o.type) - PASS.indexOf(b.o.type) || (b.s.hi - b.s.lo) - (a.s.hi - a.s.lo))[0];
       if (!via) continue;
       const kind: Door["kind"] = OPEN_PAIRS.has([r.type, via.o.type].sort().join(":")) ? "opening" : "door";
