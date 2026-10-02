@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import { furnish } from "@/lib/floorplan/furniture";
 import { placeOpenings } from "@/lib/floorplan/engine";
 import { generateWalls } from "@/lib/floorplan/walls";
-import { polygonBBox } from "@/lib/floorplan/polygon-ops";
+import { pointInPolygon, polygonBBox } from "@/lib/floorplan/polygon-ops";
 import type { Door, FloorPlan, Polygon, Room, RoomType, SitePlan, Wall, WindowMark } from "@/lib/floorplan/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -41,6 +41,19 @@ export const LIGHT = {
   deckLine: "#E0D6C4",
   accent: "#2A4BD7",
   shadow: "rgba(0,0,0,0.07)",
+  /** Colour presentation style: textured floors, coloured furniture, trees. */
+  colour: false,
+  wood: "#FFFFFF",
+  woodLine: "#FFFFFF",
+  marble: "#FFFFFF",
+  marbleLine: "#FFFFFF",
+  fabric: "#FFFFFF",
+  sofa: "#FFFFFF",
+  counter: "#FFFFFF",
+  sanitary: "#FFFFFF",
+  tree: "#E3EBD7",
+  treeInk: "#97AE7E",
+  cars: ["#FFFFFF"],
 };
 export type Palette = typeof LIGHT;
 export const BLUEPRINT: Palette = {
@@ -70,6 +83,59 @@ export const BLUEPRINT: Palette = {
   deckLine: "#26466F",
   accent: "#7CC4FF",
   shadow: "rgba(0,0,0,0)",
+  colour: false,
+  wood: "#12284A",
+  woodLine: "#12284A",
+  marble: "#12284A",
+  marbleLine: "#12284A",
+  fabric: "#12284A",
+  sofa: "#12284A",
+  counter: "#12284A",
+  sanitary: "#12284A",
+  tree: "#163055",
+  treeInk: "#6E8FBF",
+  cars: ["#12284A"],
+};
+
+/** Colour presentation plan: the look of a rendered brochure plan. */
+export const PRESENTATION: Palette = {
+  ...LIGHT,
+  paper: "#FBFAF6",
+  ground: "#DCE8C6",
+  plotLine: "#6F7F55",
+  setback: "#A9B98C",
+  room: "#F4EEE3",
+  wall: "#3A3833",
+  railing: "#55524B",
+  ink: "#2A2925",
+  inkSoft: "#5F5B52",
+  inkFaint: "#8E897D",
+  furniture: "#7A7265",
+  door: "#8D857A",
+  glass: "#4E8FD0",
+  grass: "#B9D597",
+  grassInk: "#7FA35A",
+  water: "#7FC6E8",
+  waterInk: "#2E86B9",
+  paving: "#E4DED2",
+  pavingLine: "#CFC6B6",
+  tile: "#E9EEF0",
+  tileLine: "#C9D3D8",
+  deck: "#D7B48A",
+  deckLine: "#B88F62",
+  shadow: "rgba(40,30,15,0.18)",
+  colour: true,
+  wood: "#D9B68C",
+  woodLine: "#C49A6C",
+  marble: "#EFEBE4",
+  marbleLine: "#DCD5CA",
+  fabric: "#E9DCC9",
+  sofa: "#A8B5C2",
+  counter: "#6E6A66",
+  sanitary: "#FFFFFF",
+  tree: "#6FA85A",
+  treeInk: "#4D7D3B",
+  cars: ["#C8463D", "#3E6FB0", "#E8E6E1", "#2F3238"],
 };
 export const Pal = React.createContext<Palette>(LIGHT);
 
@@ -114,8 +180,8 @@ interface Props {
   floor: FloorPlan;
   site: SitePlan;
   meta?: SheetMeta;
-  /** Force a palette (e.g. "light" for printing); defaults to the current theme. */
-  palette?: "light" | "blueprint";
+  /** Force a palette (e.g. "light" for printing, "presentation" for the colour plan); defaults to the current theme. */
+  palette?: "light" | "blueprint" | "presentation";
   /** "plan" frames the house; "site" shows the whole plot. */
   view?: "plan" | "site";
   editable?: boolean;
@@ -129,7 +195,8 @@ type DragState =
 
 export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className, palette }: Props) {
   const { resolvedTheme } = useTheme();
-  const C = (palette ?? (resolvedTheme === "dark" ? "blueprint" : "light")) === "blueprint" ? BLUEPRINT : LIGHT;
+  const pal = palette ?? (resolvedTheme === "dark" ? "blueprint" : "light");
+  const C = pal === "presentation" ? PRESENTATION : pal === "blueprint" ? BLUEPRINT : LIGHT;
   const fp = floor.footprint;
   const isGround = floor.floor === 0;
   const bb = polygonBBox(site.plot);
@@ -160,9 +227,11 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
   const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide, floor.access), [rooms, fp, floor.roadSide, floor.access]);
   const walls = React.useMemo(() => generateWalls(rooms), [rooms]);
   const furniture = React.useMemo(
-    () => rooms.flatMap((r) => furnish(r, openings.doors, openings.windows)),
+    () => rooms.flatMap((r) => furnish(r, openings.doors, openings.windows).map((sh) => ({ sh, type: r.type }))),
     [rooms, openings],
   );
+  // Colour plan: trees in the open land around the house (ground floor only).
+  const trees = React.useMemo(() => (C.colour && isGround ? plantTrees(site, fp) : []), [C.colour, isGround, site, fp]);
   const chains = React.useMemo(() => dimensionChains(rooms, fp), [rooms, fp]);
 
   const commit = (next: Room[]) => {
@@ -279,6 +348,15 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
               <rect width={0.15} height={1} fill={C.deck} />
               <path d="M 0.15 0 L 0.15 1" stroke={C.deckLine} strokeWidth={0.012} />
             </pattern>
+            <pattern id="fp-wood" width={1.8} height={0.18} patternUnits="userSpaceOnUse">
+              <rect width={1.8} height={0.18} fill={C.wood} />
+              <path d="M 0 0.18 L 1.8 0.18 M 1.1 0 L 1.1 0.18" stroke={C.woodLine} strokeWidth={0.012} />
+            </pattern>
+            <pattern id="fp-marble" width={0.6} height={0.6} patternUnits="userSpaceOnUse">
+              <rect width={0.6} height={0.6} fill={C.marble} />
+              <path d="M 0.6 0 L 0 0 0 0.6" fill="none" stroke={C.marbleLine} strokeWidth={0.01} />
+              <path d="M 0.05 0.42 q 0.15 -0.1 0.3 0 t 0.22 -0.08" fill="none" stroke={C.marbleLine} strokeWidth={0.008} />
+            </pattern>
             <pattern id="fp-grass" width={0.8} height={0.8} patternUnits="userSpaceOnUse">
               <rect width={0.8} height={0.8} fill={C.grass} />
               <path d="M 0.2 0.5 l 0.05 -0.12 l 0.05 0.12 M 0.55 0.25 l 0.05 -0.12 l 0.05 0.12" fill="none" stroke={C.grassInk} strokeWidth={0.02} />
@@ -289,7 +367,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={C.paper} />
 
           {/* Plot, setback line and road */}
-          <polygon points={pts(site.plot)} fill={landscaped ? "url(#fp-grass)" : C.ground} stroke={C.plotLine} strokeWidth={0.06 * s}
+          <polygon points={pts(site.plot)} fill={landscaped || (C.colour && isGround) ? "url(#fp-grass)" : C.ground} stroke={C.plotLine} strokeWidth={0.06 * s}
             strokeDasharray={`${0.9 * s} ${0.25 * s} ${0.15 * s} ${0.25 * s}`} />
           {isGround && (site.setbackLine && site.setbackLine.length >= 3 ? (
             <polygon points={pts(site.setbackLine)} fill="none" stroke={C.setback} strokeWidth={0.035 * s}
@@ -306,11 +384,11 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
 
           {/* Site elements (faded above the ground floor) */}
           <g opacity={isGround ? 1 : 0.35} pointerEvents="none">
-            {site.elements.map((e) => (
+            {site.elements.map((e, i) => (
               <g key={e.id}>
                 {e.type === "garden" && <GardenShape x={e.x} y={e.y} w={e.w} h={e.h} />}
                 {e.type === "pool" && <PoolShape x={e.x} y={e.y} w={e.w} h={e.h} />}
-                {e.type === "parking" && <CarShape x={e.x} y={e.y} w={e.w} h={e.h} />}
+                {e.type === "parking" && <CarShape x={e.x} y={e.y} w={e.w} h={e.h} tone={i} />}
                 {e.type !== "parking" && (
                   <text x={e.x + e.w / 2} y={e.y + e.h / 2} textAnchor="middle" dominantBaseline="middle"
                     fill={C.inkSoft} style={{ fontSize: Math.min(0.5, e.w / 7, e.h / 3), fontWeight: 600 }}>
@@ -320,6 +398,14 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
               </g>
             ))}
           </g>
+
+          {trees.map(([tx, ty, r], i) => (
+            <g key={`tree-${i}`} pointerEvents="none">
+              <circle cx={tx + 0.25} cy={ty + 0.3} r={r} fill={C.shadow} />
+              <circle cx={tx} cy={ty} r={r} fill={C.tree} stroke={C.treeInk} strokeWidth={0.05} />
+              <circle cx={tx - r * 0.3} cy={ty - r * 0.3} r={r * 0.45} fill={C.grass} opacity={0.55} />
+            </g>
+          ))}
 
           {/* House shadow */}
           {floor.footprintPolygon && floor.footprintPolygon.length >= 3
@@ -332,7 +418,9 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
             const fill = r.type === "terrace" ? "url(#fp-paving)"
               : r.type === "sitout" || r.type === "balcony" ? "url(#fp-deck)"
                 : r.type === "parking" ? "url(#fp-paving)"
-                  : WET_ROOMS.includes(r.type) ? "url(#fp-tile)" : C.room;
+                  : WET_ROOMS.includes(r.type) ? "url(#fp-tile)"
+                    : C.colour && WOOD_FLOORS.includes(r.type) ? "url(#fp-wood)"
+                      : C.colour ? "url(#fp-marble)" : C.room;
             return (
               <g key={r.id} onClick={(e) => { e.stopPropagation(); setSelected(r.id); }}>
                 <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={fill}
@@ -350,21 +438,31 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           <g pointerEvents="none">
             {rooms.filter((r) => r.type === "stair").map((r) => <StairShape key={`st-${r.id}`} r={r} />)}
             {rooms.filter((r) => r.type === "lift").map((r) => <LiftShape key={`lift-${r.id}`} r={r} />)}
-            {rooms.filter((r) => r.type === "parking").map((r) => (
-              <CarShape key={`car-${r.id}`} x={r.x + 0.15} y={r.y + 0.15} w={r.w - 0.3} h={r.h - 0.3} />
+            {rooms.filter((r) => r.type === "parking" && /^Car/.test(r.label)).map((r, i) => (
+              <CarShape key={`car-${r.id}`} x={r.x + 0.15} y={r.y + 0.15} w={r.w - 0.3} h={r.h - 0.3} tone={i} />
             ))}
           </g>
 
           {/* Furniture */}
           <g pointerEvents="none" fill={C.room} stroke={C.furniture} strokeWidth={0.035}>
-            {furniture.map((sh, i) => sh.kind === "rect"
-              ? <rect key={i} x={sh.x} y={sh.y} width={sh.w} height={sh.h} rx={sh.rx} />
-              : sh.kind === "circle"
-                ? <circle key={i} cx={sh.cx} cy={sh.cy} r={sh.r} />
-                : <line key={i} x1={sh.x1} y1={sh.y1} x2={sh.x2} y2={sh.y2} />)}
+            {furniture.map(({ sh, type }, i) => {
+              const fill = C.colour ? furnitureFill(C, type) : C.room;
+              return sh.kind === "rect"
+                ? <rect key={i} x={sh.x} y={sh.y} width={sh.w} height={sh.h} rx={sh.rx} fill={fill} />
+                : sh.kind === "circle"
+                  ? <circle key={i} cx={sh.cx} cy={sh.cy} r={sh.r} fill={fill} />
+                  : <line key={i} x1={sh.x1} y1={sh.y1} x2={sh.x2} y2={sh.y2} />;
+            })}
           </g>
 
-          {/* Walls */}
+          {/* Walls (the colour plan gives them a soft shadow) */}
+          {C.colour && (
+            <g transform="translate(0.06 0.09)" opacity={0.6}>
+              {walls.filter((w) => w.type !== "railing").map((w, i) => (
+                <line key={`ws-${i}`} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} stroke={C.shadow} strokeWidth={w.thickness} strokeLinecap="square" />
+              ))}
+            </g>
+          )}
           {walls.map((w, i) => <WallLine key={`w-${i}`} w={w} />)}
 
           {/* Doors & windows cut the walls */}
@@ -461,6 +559,40 @@ function roadLabelPos(site: SitePlan, vb: { x: number; y: number; w: number; h: 
     case "E": return { x: vb.x + vb.w - m, y: cy, rotate: true };
     case "W": return { x: vb.x + m, y: cy, rotate: true };
   }
+}
+
+const WOOD_FLOORS: RoomType[] = ["living", "lounge", "dining", "bedroom", "master_bedroom", "office", "dress"];
+
+/** Colour plan: furniture tinted by the room it stands in. */
+function furnitureFill(C: Palette, type: RoomType): string {
+  if (type === "bedroom" || type === "master_bedroom" || type === "dress") return C.fabric;
+  if (type === "living" || type === "lounge" || type === "office" || type === "sitout" || type === "balcony") return C.sofa;
+  if (type === "kitchen" || type === "utility") return C.counter;
+  if (type === "bathroom" || type === "toilet") return C.sanitary;
+  if (type === "dining") return C.wood;
+  return C.room;
+}
+
+/** Trees in the open land: a loose grid, kept off the house, the outdoor features and the plot edge. */
+function plantTrees(site: SitePlan, fp: { x: number; y: number; w: number; h: number }): [number, number, number][] {
+  const bb = polygonBBox(site.plot);
+  const out: [number, number, number][] = [];
+  const clear = (x: number, y: number, r: number) =>
+    pointInPolygon([x, y], site.plot)
+    && [[x - r, y], [x + r, y], [x, y - r], [x, y + r]].every((q) => pointInPolygon(q as [number, number], site.plot))
+    && (x < fp.x - r - 0.6 || x > fp.x + fp.w + r + 0.6 || y < fp.y - r - 0.6 || y > fp.y + fp.h + r + 0.6)
+    && site.elements.every((e) => x < e.x - r - 0.3 || x > e.x + e.w + r + 0.3 || y < e.y - r - 0.3 || y > e.y + e.h + r + 0.3);
+  const step = 2.6;
+  for (let y = bb.y + 1.0; y < bb.y + bb.h - 0.8; y += step) {
+    for (let x = bb.x + 1.0; x < bb.x + bb.w - 0.8; x += step) {
+      // Stagger rows and vary sizes, deterministically.
+      const jx = x + ((Math.round(y / step) % 2) * step) / 2;
+      const r = 0.7 + ((Math.round(jx * 7 + y * 3) % 5) * 0.12);
+      if (clear(jx, y, r)) out.push([jx, y, r]);
+    }
+  }
+  // The front strip along the road stays open for the gate and drive.
+  return out.filter(([, y]) => y < bb.y + bb.h - 2.4).slice(0, 48);
 }
 
 function WallLine({ w }: { w: Wall }) {
@@ -591,7 +723,7 @@ function StairShape({ r }: { r: Room }) {
   );
 }
 
-function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+function CarShape({ x, y, w, h, tone = 0 }: { x: number; y: number; w: number; h: number; tone?: number }) {
   const C = React.useContext(Pal);
   const vertical = h >= w;
   const cw = vertical ? Math.min(w * 0.72, 1.9) : Math.min(h * 0.72, 1.9);
@@ -603,7 +735,7 @@ function CarShape({ x, y, w, h }: { x: number; y: number; w: number; h: number }
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} fill="url(#fp-paving)" stroke={C.pavingLine} strokeWidth={0.03} />
-      <rect x={cx - bw / 2} y={cy - bh / 2} width={bw} height={bh} rx={0.45} fill={C.room} stroke={C.furniture} strokeWidth={0.04} />
+      <rect x={cx - bw / 2} y={cy - bh / 2} width={bw} height={bh} rx={0.45} fill={C.colour ? C.cars[tone % C.cars.length] : C.room} stroke={C.furniture} strokeWidth={0.04} />
       {vertical ? (
         <>
           <rect x={cx - bw / 2 + 0.2} y={cy - bh / 2 + bh * 0.24} width={bw - 0.4} height={bh * 0.18} rx={0.12} fill={C.pavingLine} />
