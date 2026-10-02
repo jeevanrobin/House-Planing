@@ -10,6 +10,7 @@ import { polygonBBox } from "@/lib/floorplan/polygon-ops";
 import type { Door, FloorPlan, Polygon, Room, RoomType, SitePlan, Wall, WindowMark } from "@/lib/floorplan/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ftIn } from "@/lib/floorplan/units";
 
 const PAD = 2.2; // metres of margin around the plot
 /** Drawing palettes: trace paper (light) and blueprint (dark). Concrete colours, so exports are self-contained. */
@@ -125,12 +126,6 @@ type DragState =
   | { mode: "move"; id: string; ox: number; oy: number }
   | { mode: "resize"; id: string; ox: number; oy: number }
   | null;
-
-/** 3.45 m → 11′4″ */
-function ftIn(m: number): string {
-  const totalIn = Math.round(m * 39.3701);
-  return `${Math.floor(totalIn / 12)}′${totalIn % 12}″`;
-}
 
 export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className, palette }: Props) {
   const { resolvedTheme } = useTheme();

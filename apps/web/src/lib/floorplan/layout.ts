@@ -175,12 +175,13 @@ export function expandBands(prog: FloorProgram, W: number): { bands: Band[]; sta
   const overflow: Unit[] = [];
   let stairBand = -1;
   prog.bands.forEach((b, i) => {
+    // The stair may sit in a fixed-depth band (beside the car porch on narrow plots).
+    if (i === prog.stairBand) stairBand = bands.length;
     if (b.fixedD !== undefined || !b.units.length) {
       bands.push(b);
       return;
     }
     const [first, ...rest] = packRows(b.units, W);
-    if (i === prog.stairBand) stairBand = bands.length;
     bands.push({ ...b, units: first });
     overflow.push(...rest.flat());
   });

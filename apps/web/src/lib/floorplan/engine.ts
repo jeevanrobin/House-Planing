@@ -16,8 +16,8 @@
  *  6. Site      – parking, pool and garden go in the open land around the house.
  */
 import {
-  BALCONY_D, groundProgram, upperProgram,
-  type Band, type FloorProgram, type RoomSpec, type Unit,
+  BALCONY_D, CAR_W, groundProgram, stairWidthFor, upperProgram,
+  type Band, type Trim, type FloorProgram, type RoomSpec, type Unit,
 } from "./program";
 import {
   compactUnit, expandBands, fitDepths, layoutBands, packPrivate, passageUnit, privateBands, targetDepth,
@@ -76,8 +76,10 @@ function withAfterLiving(units: Unit[], u: Unit): Unit[] {
 
 /** Open-plan living + dining on wide houses so the living room isn't stretched. */
 function adjustGround(prog: FloorProgram, W: number): FloorProgram {
-  const pub = prog.bands.find((b) => b.kind === "public")!;
-  const svc = prog.bands.find((b) => b.kind === "service")!;
+  const pub = prog.bands.find((b) => b.kind === "public");
+  const svc = prog.bands.find((b) => b.kind === "service");
+  // Only beside the living room (not when it moved forward beside the car).
+  if (!pub || !svc || !pub.units.some((u) => u.cols[0].rooms[0].type === "living")) return prog;
   const pubArea = pub.units.flatMap((u) => u.cols).flatMap((c) => c.rooms).reduce((a, r) => a + r.area, 0);
   const dining = svc.units.find((u) => u.cols[0].rooms[0].type === "dining");
   if (!dining || pubArea / W >= pub.minD * 0.8) return prog;
@@ -119,10 +121,19 @@ function frontBedrooms(prog: FloorProgram, W: number): FloorProgram {
 
 
 function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boolean, ctx: SiteContext): FloorStructure & { stairBand: number } {
-  const raw = groundProgram(req, porch, ctx.fit);
+  // Narrow plots: the stair rises beside the car porch.
+  const stairFront = porch && req.floors > 1 && W < 7.5;
+  // Wider plots: the living room sits beside the car rather than behind a sit-out.
+  const livingFront = porch && !stairFront && W - req.parking * CAR_W >= 3.6;
+  const raw = groundProgram(req, porch, ctx.fit, ctx.trim, stairFront, livingFront, stairWidthFor(W));
   // Tight plots can drop the sit-out (main door straight onto the front wall).
   const base = ctx.noSitout && !porch ? { ...raw, bands: raw.bands.filter((b) => b.kind !== "sitout"), stairBand: raw.stairBand >= 0 ? raw.stairBand - 1 : -1 } : raw;
-  const prog = adjustGround(frontBedrooms(base, W), W);
+  let prog = adjustGround(frontBedrooms(base, W), W);
+  // Living room beside the car: rooms in the row behind it (office, a bedroom)
+  // would cut it off from the dining, so a passage runs through that row.
+  if (livingFront) {
+    prog = { ...prog, bands: prog.bands.map((b) => (b.kind === "public" ? { ...b, units: [...b.units, passageUnit()] } : b)) };
+  }
   const { bands, stairBand, overflow: spill } = expandBands(prog, W);
   // Maximising a wide plot: spare width in the living and kitchen rows becomes
   // an open-to-sky courtyard (angan) rather than stretched rooms.
@@ -146,7 +157,7 @@ function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boo
     overflow.push(u);
   }
   // Single-storey "balconies" are decks in the bedroom row, off the hallway.
-  const decks: Unit[] = req.floors === 1
+  const decks: Unit[] = req.floors === 1 && !ctx.trim
     ? Array.from({ length: req.balconies }, (_, i) => ({ cols: [{ rooms: [{ ...openSpec("balcony", `Balcony ${i + 1}`, 6, `gbal-${i}`), minW: 1.8, minD: 1.5 }] }] }))
     : [];
   const privateUnits = [...overflow, ...prog.privateUnits, ...decks];
@@ -169,18 +180,32 @@ function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boo
   return { bands: all, frozen: stairBand + 1, stairBand };
 }
 
-function upperStructure(req: Requirements, floor: number, W: number, Wrear: number, stairY: number, stairD: number, fit: number, maxUse = false): FloorStructure {
-  const prog = upperProgram(req, floor, fit);
+function upperStructure(req: Requirements, floor: number, W: number, Wrear: number, stairY: number, stairD: number, fit: number, maxUse = false, trim: Trim = 0): FloorStructure {
+  const prog = upperProgram(req, floor, fit, trim, stairWidthFor(W));
   const balcony = prog.bands.find((b) => b.kind === "balcony");
   const stair = prog.bands[prog.stairBand];
-  const useBalcony = !!balcony && stairY - BALCONY_D >= 3.0;
-  const frontD = stairY - (useBalcony ? BALCONY_D : 0);
-
   const rows = packPrivate(prog.privateUnits, W);
+  // A bedroom with its bath stacked behind it needs ~4.3 m; keep the front
+  // balcony only if the bedrooms still get that depth.
+  const stacked = (rows[0] ?? []).some((u) => u.cols.some((c) => c.rooms.filter((r) => !r.optional).length > 1));
+  const useBalcony = !!balcony && stairY - BALCONY_D >= (stacked ? 4.3 : 3.0);
+  const frontD = stairY - (useBalcony ? BALCONY_D : 0);
   const frontUnits = frontD >= 3.0 ? rows[0] ?? [] : [];
   // Compact variants are copies, so match units by their first room.
   const frontKeys = new Set(frontUnits.map((u) => u.cols[0].rooms[0].key));
-  const rearUnits = prog.privateUnits.filter((u) => !frontKeys.has(u.cols[0].rooms[0].key));
+  let rearUnits = prog.privateUnits.filter((u) => !frontKeys.has(u.cols[0].rooms[0].key));
+  let stairUnits = stair.units;
+  // Stair at the very front (beside the car porch on narrow plots): a bedroom
+  // over the porch takes the lounge's place beside it, as on 20–25 ft plots.
+  if (stairY < 0.01) {
+    const stairUnit = stair.units.find((u) => u.cols[0].rooms[0].type === "stair")!;
+    const room = W - (stairUnit.cols[0].fixedW ?? 0);
+    const i = rearUnits.findIndex((u) => /bedroom/.test(u.cols[0].rooms[0].type) && unitMinW(compactUnit(u)) <= room + 1e-6);
+    if (i >= 0) {
+      stairUnits = [{ ...compactUnit(rearUnits[i]), pin: "start" }, stairUnit];
+      rearUnits = rearUnits.filter((_, j) => j !== i);
+    }
+  }
 
   const bands: Band[] = [];
   if (useBalcony) {
@@ -191,7 +216,7 @@ function upperStructure(req: Requirements, floor: number, W: number, Wrear: numb
     ? withFiller({ kind: "front", units: frontUnits, fixedD: frontD, minD: frontD, maxD: frontD }, W, "Open Terrace", `fterr-${floor}`)
     : { kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", W * frontD, `fterr-${floor}`)] }] }], fixedD: frontD, minD: frontD, maxD: frontD };
   if (frontD > 0.3) bands.push(front);
-  const stairBand: Band = { ...stair, fixedD: stairD, minD: stairD, maxD: stairD };
+  const stairBand: Band = { ...stair, units: stairUnits, fixedD: stairD, minD: stairD, maxD: stairD };
   bands.push(maxUse ? withFiller({ ...stairBand, fixedD: undefined }, W, "Open Terrace", `sterr-${floor}`) : stairBand);
   if (maxUse) bands[bands.length - 1] = { ...bands[bands.length - 1], fixedD: stairD };
 
@@ -209,8 +234,8 @@ function upperStructure(req: Requirements, floor: number, W: number, Wrear: numb
 }
 
 /** Depth an upper floor needs in front of the stair for its street-facing rooms. */
-function upperFrontNeed(req: Requirements, floor: number, W: number, fit: number): number {
-  const prog = upperProgram(req, floor, fit);
+function upperFrontNeed(req: Requirements, floor: number, W: number, fit: number, trim: Trim = 0): number {
+  const prog = upperProgram(req, floor, fit, trim, stairWidthFor(W));
   const front = packPrivate(prog.privateUnits, W)[0];
   if (!front?.length) return 0;
   const d = targetDepth({ kind: "front", units: front, minD: 3.0, maxD: 5.0 }, W);
@@ -242,6 +267,8 @@ interface SiteContext {
   env: Envelope;
   /** Room-size multiplier (1 = brief as given; < 1 compact; > 1 roomier on big plots). */
   fit: number;
+  /** Program trimmed for a tight plot (see Trim). */
+  trim?: Trim;
   noSitout?: boolean;
   /** Make full use of the plot: favour wide houses that follow its shape. */
   maxUse?: boolean;
@@ -346,6 +373,10 @@ interface Candidate {
   uExt: Extent[][];
   /** Depth scale (< 1 only when the plot is too shallow for the brief). */
   k: number;
+  /** Rooms below their minimum size or width — the brief doesn't really fit. */
+  cramped: number;
+  /** Requested parking didn't fit anywhere. */
+  noCar: boolean;
   cost: number;
 }
 
@@ -394,7 +425,7 @@ function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: bo
   if (si >= 0) {
     const stairY = depths.slice(0, si).reduce((a, b) => a + b, 0);
     let need = 0;
-    for (let f = 1; f < req.floors; f++) need = Math.max(need, upperFrontNeed(req, f, Wfront, ctx.fit));
+    for (let f = 1; f < req.floors; f++) need = Math.max(need, upperFrontNeed(req, f, Wfront, ctx.fit, ctx.trim));
     const grow = Math.min(need - stairY, 3);
     const j = ground.bands.slice(0, si).map((b, i) => (b.fixedD === undefined && b.units.length ? i : -1)).filter((i) => i >= 0).pop();
     if (grow > 0.05 && j !== undefined) {
@@ -412,7 +443,7 @@ function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: bo
   const uppers: FloorStructure[] = [];
   let D = depths.reduce((a, b) => a + b, 0);
   for (let f = 1; f < req.floors; f++) {
-    const st = upperStructure(req, f, Wfront, Number.isFinite(rearW) ? rearW : Wfront, stairY, stairD, ctx.fit, ctx.maxUse);
+    const st = upperStructure(req, f, Wfront, Number.isFinite(rearW) ? rearW : Wfront, stairY, stairD, ctx.fit, ctx.maxUse, ctx.trim);
     uppers.push(st);
     const ue = upperExtents(st.bands.map((b) => targetDepth(b, Wfront)), depths, ext, st.bands);
     D = Math.max(D, st.bands.reduce((a, b, i) => a + targetDepth(b, ue[i].w), 0));
@@ -440,13 +471,16 @@ function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: bo
   const structures = [ground, ...uppers];
   const allDepths = [gDepths, ...uDepths];
   const allExt = [gExt, ...uExt];
-  const rooms = structures.reduce((a, st, i) => a + roomPenalty(layoutBands(st.bands, allDepths[i], allExt[i], () => false).rooms), 0);
+  const laid = structures.map((st, i) => layoutBands(st.bands, allDepths[i], allExt[i], () => false).rooms);
+  const rooms = laid.reduce((a, placed) => a + roomPenalty(placed), 0);
+  const cramped = laid.flat().filter((r) => isCramped(r.spec, r.w, r.h)).length;
   const filler = structures.flatMap((st) => st.bands).flatMap((b) => b.units).flatMap((u) => u.cols)
     .flatMap((c) => c.rooms).filter((r) => r.type === "terrace").reduce((a, r) => a + r.area, 0);
   const blocks = bandRects(gDepths, gExt, y0);
   const siteReq = porch ? { ...req, parking: 0 as const } : req;
   const siteWarnings = planSite(ctx.frame, bbox(blocks), siteReq, ctx.sb, blocks, false).warnings;
   const site = siteWarnings.reduce((a, w) => a + (w.includes("car space") ? 3.5 : 1), 0);
+  const noCar = siteWarnings.some((w) => w.includes("car space"));
   const jogs = gExt.filter((e, i) => i > 0 && gDepths[i] > 0.01 && gDepths[i - 1] > 0.01 && Math.abs(e.x0 - gExt[i - 1].x0) > 0.05).length;
   const over = Math.max(0, D - avail);
   const aspect = Math.abs(Math.log(D / W / 1.15));
@@ -455,7 +489,7 @@ function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: bo
   const cost = over * 40 + rooms * 3 + aspect * (ctx.maxUse ? 1 : 4) + (filler / (W * D)) * (ctx.maxUse ? 4 : 12)
     + site * 10 + (porch ? 4 : 0) + jogs * (ctx.maxUse ? 0.3 : 0.8) + shaped.missing * 50 + usePull;
   if (process.env.PLAN_DEBUG && !porch && ctx.maxUse) console.log("W", W.toFixed(2), "fit", ctx.fit.toFixed(2), "cost", cost.toFixed(1), JSON.stringify({ over: +over.toFixed(2), rooms: +(rooms * 3).toFixed(1), filler: +((filler / (W * D)) * 4).toFixed(1), site, jogs, miss: shaped.missing, usePull: +usePull.toFixed(1), D: +D.toFixed(1), k: +k.toFixed(2), maxW: +env.maxWidth().toFixed(1), ext: gExt.map((e) => +e.w.toFixed(1)) }));
-  return { W, D, y0, porch, ground, uppers, gDepths, gExt, uDepths, uExt, k, cost };
+  return { W, D, y0, porch, ground, uppers, gDepths, gExt, uDepths, uExt, k, cramped, noCar, cost };
 }
 
 /** Footprint rectangles (plot-local) of a set of bands. */
@@ -470,6 +504,11 @@ function bbox(rects: Rect[]): Rect {
   return { x, y, w: Math.max(...rects.map((r) => r.x + r.w)) - x, h: Math.max(...rects.map((r) => r.y + r.h)) - y };
 }
 
+/** How badly a candidate misses the brief: undersized rooms, no parking, compressed depth. */
+// A squeeze of up to 3% is harmless: rooms are checked at their compressed size.
+const badness = (c: Candidate) => c.cramped + (c.noCar ? 2 : 0) + (c.k < 0.97 ? 5 + (1 - c.k) * 100 : 0);
+const better = (a: Candidate, b: Candidate) => badness(a) < badness(b) - 1e-9 || (Math.abs(badness(a) - badness(b)) < 1e-9 && a.cost < b.cost);
+
 /** Best house width (and parking strategy): a coarse sweep, then a fine one around the winner. */
 function chooseCandidate(req: Requirements, ctx: SiteContext): Candidate {
   const maxW = Math.min(ctx.env.maxWidth(), MAX_HOUSE_W);
@@ -477,7 +516,7 @@ function chooseCandidate(req: Requirements, ctx: SiteContext): Candidate {
   const tryW = (W: number) => {
     for (const porch of req.parking > 0 ? [false, true] : [false]) {
       const c = evaluateWidth(req, W, ctx, porch);
-      if (!best || c.cost < best.cost) best = c;
+      if (!best || better(c, best)) best = c;
     }
   };
   for (let W = Math.min(6, maxW); W <= maxW + 1e-9; W += 0.5) tryW(W);
@@ -657,8 +696,19 @@ function buildSuggestions(plan: PlanResult, req: Requirements, siteWarnings: str
   return out;
 }
 
+/** Below minimum area, narrower than the room's own minimum, or a porch too short for a car. */
+function isCramped(spec: RoomSpec, w: number, h: number): boolean {
+  if (spec.type === "parking") return Math.max(w, h) < 4.25 || Math.min(w, h) < 2.5;
+  if (OPEN_TYPES.has(spec.type) || spec.type === "corridor" || spec.type === "terrace" || spec.optional) return false;
+  // Stairs have a fixed, deliberate width; only their area matters here.
+  if (spec.type === "stair") return w * h < (MIN_ROOM_AREA.stair ?? 0) - 1e-6;
+  const min = MIN_ROOM_AREA[spec.type];
+  const narrow = Math.min(w, h) < Math.max(0.9, Math.min(spec.minW, spec.minD) * 0.9);
+  return (min !== undefined && w * h < min - 1e-6) || narrow;
+}
+
 const MIN_ROOM_AREA: Partial<Record<string, number>> = {
-  living: 10, lounge: 8, dining: 6, kitchen: 5, toilet: 1.5, pooja: 1.5, office: 6, stair: 7,
+  living: 10, lounge: 8, dining: 6, kitchen: 5, toilet: 1.5, pooja: 1.5, office: 6, stair: 6,
   store: 1.2, utility: 1.2, master_bedroom: 10, bedroom: 8, bathroom: 2.5, dress: 1.2,
 };
 
@@ -674,6 +724,9 @@ export function validatePlanRequirements(plan: PlanResult, req: Requirements): {
     if (!OPEN_TYPES.has(room.type) && room.type !== "corridor" && Math.min(room.w, room.h) < 0.9) {
       errors.push(`${room.label} is too narrow (${Math.min(room.w, room.h).toFixed(2)} m).`);
     }
+  }
+  for (const car of all.filter((r) => r.type === "parking")) {
+    if (Math.max(car.w, car.h) < 4.25) errors.push(`${car.label} is only ${Math.max(car.w, car.h).toFixed(1)} m long; a car needs at least 4.3 m (14 ft).`);
   }
   const count = (pred: (r: Room) => boolean) => all.filter(pred).length;
   const beds = count((r) => r.type === "bedroom" || r.type === "master_bedroom");
@@ -709,7 +762,7 @@ function generateShaped(req: Requirements): PlanResult {
   const frame = makePlotFrame(req);
   const sb = setbacksFor(frame.pw, frame.pd);
 
-  let chosen: { floors: Room[][]; score: number; cand: Candidate; placement: Placement; fit: number; rects: Rect[] } | null = null;
+  let chosen: { floors: Room[][]; score: number; cand: Candidate; placement: Placement; fit: number; trim: Trim; rects: Rect[] } | null = null;
   for (const mirror of [false, true]) {
     // The layout always runs with its spine on the right; mirroring the plot
     // gives the left-spine variant (and the other Vastu orientation).
@@ -719,30 +772,35 @@ function generateShaped(req: Requirements): PlanResult {
 
     // Fit the brief: compact step by step when it doesn't fit; on generous
     // plots, let rooms grow towards villa proportions.
-    const attempts: { fit: number; noSitout: boolean }[] = [
-      { fit: 1, noSitout: false }, { fit: 0.9, noSitout: false }, { fit: 1, noSitout: true },
-      { fit: 0.9, noSitout: true }, { fit: 0.8, noSitout: false }, { fit: 0.8, noSitout: true },
-      { fit: 0.72, noSitout: true },
+    // Tight plots trim the program the way Indian plans do (no powder room or
+    // stores, then one hall and 4'×7' baths) before shrinking rooms.
+    const attempts: { fit: number; trim: Trim; noSitout: boolean }[] = [
+      { fit: 1, trim: 0, noSitout: false }, { fit: 0.9, trim: 0, noSitout: false },
+      { fit: 1, trim: 1, noSitout: false }, { fit: 0.9, trim: 1, noSitout: false },
+      { fit: 1, trim: 2, noSitout: false }, { fit: 0.9, trim: 2, noSitout: false },
+      { fit: 0.9, trim: 2, noSitout: true }, { fit: 0.8, trim: 2, noSitout: false },
+      { fit: 0.8, trim: 2, noSitout: true }, { fit: 0.72, trim: 2, noSitout: true },
     ];
     let cand: Candidate | null = null;
     let fit = 1;
+    let trim: Trim = 0;
     for (const a of attempts) {
       const next = chooseCandidate(req, { ...base, ...a });
-      if (!cand || next.D * (1 / next.k) < cand.D * (1 / cand.k) - 0.05 || (next.k === 1 && cand.k < 1)) { cand = next; fit = a.fit; }
-      if (cand.k >= 1) break;
+      if (!cand || badness(next) < badness(cand)) { cand = next; fit = a.fit; trim = a.trim; }
+      if (badness(cand) === 0) break;
     }
     if (!cand) throw new Error("No layout candidate");
     // Generous plots: let rooms grow. "Maximise" aims for ~60% ground coverage
     // of the buildable land (a typical bye-law ceiling); "balanced" ~42%.
     const maxUse = (req.plotUse ?? (req.plotPolygon ? "max" : "balanced")) === "max";
-    if (fit === 1 && cand.k >= 1) {
+    if (fit === 1 && trim === 0 && cand.k >= 1) {
       const footprint = bandRects(cand.gDepths, cand.gExt, cand.y0).reduce((a, r) => a + r.w * r.h, 0);
       const target = (maxUse ? 0.6 : 0.42) * env.area();
       const roomier = Math.min(maxUse ? 1.9 : 1.45, Math.sqrt(target / Math.max(footprint, 1)));
       for (const f of [roomier, 1 + (roomier - 1) * 0.6, 1 + (roomier - 1) * 0.3]) {
         if (f <= 1.05) break;
         const big = chooseCandidate(req, { ...base, fit: f, maxUse });
-        if (big.k >= 1) { cand = big; fit = f; break; }
+        if (big.k >= 1 && badness(big) === 0) { cand = big; fit = f; break; }
       }
     }
 
@@ -754,10 +812,10 @@ function generateShaped(req: Requirements): PlanResult {
     const exts = [cand.gExt, ...cand.uExt];
     const floors = all.map((st, i) => bestFloor(st, depths[i], exts[i], { ...placement, y0: cand!.y0 }, fp, req));
     const score = floors.reduce((a, f) => a + f.score, 0) - cand.cost * 0.01;
-    if (!chosen || score > chosen.score + 1e-9) chosen = { floors: floors.map((f) => f.rooms), score, cand, placement, fit, rects };
+    if (!chosen || score > chosen.score + 1e-9) chosen = { floors: floors.map((f) => f.rooms), score, cand, placement, fit, trim, rects };
   }
 
-  const { cand, placement, fit, rects } = chosen!;
+  const { cand, placement, fit, trim, rects } = chosen!;
   const toWorldPt = ([x, y]: [number, number]) => {
     const r = toWorld(placement, { x, y, w: 0, h: 0 });
     return [r.x, r.y] as [number, number];
@@ -810,6 +868,14 @@ function generateShaped(req: Requirements): PlanResult {
   if (cand.porch) {
     result.suggestions.push({ kind: "space", severity: "info", message: "Cars park in a covered porch at the front of the house, under the floor above." });
   }
+  if (trim >= 1) {
+    result.suggestions.push({
+      kind: "space", severity: "info",
+      message: trim >= 2
+        ? "Planned as a compact home for this plot: a hall and a kitchen-dining, 4'×7' bathrooms, and a pooja niche instead of a separate room."
+        : "Planned without a powder room, stores or dressing rooms so the main rooms keep their size on this plot.",
+    });
+  }
   if (fit < 1) {
     result.suggestions.push({ kind: "space", severity: "info", message: `Rooms were sized compactly (about ${Math.round(fit * 100)}% of the usual size for this finish level) to fit the plot.` });
   } else if (fit > 1) {
@@ -823,6 +889,12 @@ function generateShaped(req: Requirements): PlanResult {
   }
   result.suggestions = [...buildSuggestions(result, req, warnings), ...result.suggestions];
   result.validation = validatePlanRequirements(result, req);
+  if (!result.validation.ok && req.floors < 4) {
+    result.suggestions.unshift({
+      kind: "space", severity: "warn",
+      message: `${req.bedrooms} bedrooms don't fit comfortably on ${req.floors === 1 ? "one floor" : `${req.floors} floors`} of this plot. Add a floor or plan one bedroom fewer for full-size rooms.`,
+    });
+  }
   return result;
 }
 

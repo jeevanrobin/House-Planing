@@ -80,11 +80,28 @@ const CATALOG: Record<string, [number, number, number]> = {
   bathroom: [4.2, 1.5, 1.8],
   master_dress: [4.5, 1.5, 1.2],
   dress: [3.2, 1.2, 1.2],
+  // Compact Indian sizes for tight plots: a 4'×7' toilet, a combined hall.
+  compact_bath: [2.6, 1.2, 2.1],
+  hall: [17, 3.3, 3.6],
+  kitchen_dining: [12, 2.4, 2.7],
 };
 
-export const PORCH_D = 5.5; // car length + clearance
+/**
+ * How far the program is trimmed to fit a tight plot, before rooms shrink:
+ *  0 – full program;
+ *  1 – no powder room, stores, utility or dressing rooms;
+ *  2 – also a hall and a kitchen-dining instead of three rooms, 4'×7' baths,
+ *      no separate pooja room, and every bedroom upstairs on multi-storey homes.
+ */
+export type Trim = 0 | 1 | 2;
+
+export const PORCH_D = 5.0; // 16 ft: car length + clearance, the usual Indian porch
 export const CAR_W = 3.0;
 export const STAIR_W = 2.6; // dog-leg stair: two 1.1 m flights + 0.4 m gap
+export const STAIR_W_NARROW = 2.1; // narrow plots: two 3 ft (0.95 m) flights + 0.2 m gap
+
+/** Houses under ~28 ft wide use 3 ft flights, as Indian plans on 20–30 ft plots do. */
+export const stairWidthFor = (houseW: number) => (houseW < 8.5 ? STAIR_W_NARROW : STAIR_W);
 export const STAIR_MIN_D = 3.9; // run for ~3 m floor height + landing
 export const CORRIDOR_D = 1.2;
 export const SITOUT_D = 1.5;
@@ -116,11 +133,12 @@ function room(type: RoomType, label: string, s: number, catalogKey: string = typ
 
 const single = (r: RoomSpec, pin?: Unit["pin"]): Unit => ({ cols: [{ rooms: [r] }], pin });
 
-export function bedroomsPerFloor(total: number, floors: number): number[] {
+export function bedroomsPerFloor(total: number, floors: number, groundBed = true): number[] {
   if (floors <= 1) return [total];
   const out = new Array(floors).fill(0);
-  // A ground-floor bedroom for elders/guests once there are 3+ bedrooms.
-  out[0] = total >= 3 ? 1 : 0;
+  // A ground-floor bedroom for elders/guests once there are 3+ bedrooms
+  // (tight plots give the ground floor to parking and living instead).
+  out[0] = total >= 3 && groundBed ? 1 : 0;
   let remaining = total - out[0];
   let f = 1;
   while (remaining > 0) {
@@ -160,13 +178,13 @@ export function balconiesPerFloor(total: number, floors: number): number[] {
 }
 
 /** Bedroom units (bedroom + ensuite column) and common baths for one floor. */
-function privateUnits(req: Requirements, floor: number, s: number): Unit[] {
-  const beds = bedroomsPerFloor(req.bedrooms, req.floors)[floor] ?? 0;
-  let baths = bathroomsPerFloor(req.bathrooms, req.floors, bedroomsPerFloor(req.bedrooms, req.floors))[floor] ?? 0;
+function privateUnits(req: Requirements, floor: number, s: number, trim: Trim = 0): Unit[] {
+  const perFloor = bedroomsPerFloor(req.bedrooms, req.floors, trim < 2);
+  const beds = perFloor[floor] ?? 0;
+  let baths = bathroomsPerFloor(req.bathrooms, req.floors, perFloor)[floor] ?? 0;
   const masterFloor = req.floors > 1 ? 1 : 0;
   const units: Unit[] = [];
   // Number bedrooms across the whole house (the master is not numbered).
-  const perFloor = bedroomsPerFloor(req.bedrooms, req.floors);
   let n = 1;
   for (let f = 0; f < floor; f++) n += perFloor[f] - (f === masterFloor && req.bedrooms > 1 ? 1 : 0);
   for (let b = 0; b < beds; b++) {
@@ -176,15 +194,15 @@ function privateUnits(req: Requirements, floor: number, s: number): Unit[] {
       : room("bedroom", `Bedroom ${n++}`, s);
     if (baths > 0) {
       baths -= 1;
-      const bath = room("bathroom", master ? "Master Bath" : "Bath", s, master ? "master_bath" : "bathroom", { parentKey: bed.key });
+      const bath = room("bathroom", master ? "Master Bath" : "Bath", s, trim >= 2 ? "compact_bath" : master ? "master_bath" : "bathroom", { parentKey: bed.key });
       const dress = room("dress", master ? "Walk-in Closet" : "Dress", s, master ? "master_dress" : "dress", { parentKey: bed.key, optional: true });
-      units.push({ cols: [{ rooms: [bed] }, { rooms: [dress, bath] }] });
+      units.push({ cols: [{ rooms: [bed] }, { rooms: trim >= 1 ? [bath] : [dress, bath] }] });
     } else {
       units.push(single(bed));
     }
   }
   for (let i = 0; i < baths; i++) {
-    units.push({ cols: [{ rooms: [room("bathroom", "Common Bath", s)] }] });
+    units.push({ cols: [{ rooms: [room("bathroom", "Common Bath", s, trim >= 2 ? "compact_bath" : "bathroom")] }] });
   }
   if (floor > 0 && req.homeOffice && floor === 1) {
     units.push(single(room("office", "Home Office", s)));
@@ -205,17 +223,29 @@ export interface FloorProgram {
  * Ground floor: sit-out → living → kitchen/dining (+stair) → [corridor → bedrooms].
  * With `porch`, cars park in a covered porch across the front instead of the yard.
  */
-export function groundProgram(req: Requirements, porch = false, fit = 1): FloorProgram {
+/**
+ * With `stairFront` (narrow plots, cars in a porch) the staircase rises beside
+ * the car porch, as on most 20–25 ft Indian plots, instead of behind the kitchen.
+ * With `livingFront` (25–40 ft plots) the living room sits beside the car
+ * instead of a full-width sit-out, so parking costs no extra depth.
+ */
+export function groundProgram(req: Requirements, porch = false, fit = 1, trim: Trim = 0, stairFront = false, livingFront = false, stairW = STAIR_W): FloorProgram {
   keySeq = 0;
   const s = scale(req, fit);
   const bands: Band[] = [];
 
+  const living = trim >= 2 ? room("living", "Hall", s, "hall") : room("living", "Living Room", s);
+  livingFront = livingFront && porch && !stairFront;
   if (porch) {
     const cars: Unit[] = Array.from({ length: req.parking }, (_, i) => ({
-      cols: [{ rooms: [{ ...room("parking", req.parking > 1 ? `Car Porch ${i + 1}` : "Car Porch", s), area: CAR_W * PORCH_D, minW: 2.7, minD: 5.0 }], fixedW: CAR_W }],
+      // Beside a front stair the car takes the remaining width, so the stair keeps its exact width on every floor.
+      cols: [{ rooms: [{ ...room("parking", req.parking > 1 ? `Car Porch ${i + 1}` : "Car Porch", s), area: CAR_W * PORCH_D, minW: 2.7, minD: 5.0 }], fixedW: stairFront ? undefined : CAR_W }],
       pin: "start" as const,
     }));
-    bands.push({ kind: "sitout", units: [...cars, single(room("sitout", "Sit-out", s))], fixedD: PORCH_D, minD: PORCH_D, maxD: PORCH_D });
+    const beside = stairFront
+      ? { cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: STAIR_W_NARROW }], pin: "end" as const }
+      : livingFront ? single(living, "end") : single(room("sitout", "Sit-out", s));
+    bands.push({ kind: "sitout", units: [...cars, beside], fixedD: PORCH_D, minD: PORCH_D, maxD: PORCH_D });
   } else {
     bands.push({ kind: "sitout", units: [single(room("sitout", "Sit-out", s))], fixedD: SITOUT_D, minD: SITOUT_D, maxD: SITOUT_D });
   }
@@ -226,34 +256,47 @@ export function groundProgram(req: Requirements, porch = false, fit = 1): FloorP
   // so both small rooms open off the living room; front bedrooms go beyond them.
   const pub: Unit[] = [];
   // A compact pooja with a small store behind it, rather than a deep sliver.
-  if (req.vastu) pub.push({ cols: [{ rooms: [room("pooja", "Pooja", s), room("store", "Store", s, "store", { optional: true })], absorb: 1 }], pin: "end" });
-  pub.push(single(room("living", "Living Room", s), "end"));
+  // Tight plots keep a pooja niche in the hall instead of a separate room.
+  const poojaUnits: Unit[] = [];
+  if (req.vastu && trim < 2) {
+    (livingFront ? poojaUnits : pub).push({ cols: [{ rooms: trim >= 1 ? [room("pooja", "Pooja", s)] : [room("pooja", "Pooja", s), room("store", "Store", s, "store", { optional: true })], absorb: trim >= 1 ? undefined : 1 }], pin: livingFront ? undefined : "end" });
+  }
+  if (!livingFront) pub.push(single(living, "end"));
   if (req.homeOffice && req.floors === 1) pub.push(single(room("office", "Home Office", s)));
-  bands.push({ kind: "public", units: pub, minD: 3.3, maxD: 5.4 });
+  // The public band carries the pooja / powder room even when the living room moved forward.
+  const pubBand: Band = { kind: "public", units: pub, minD: livingFront ? 2.1 : 3.3, maxD: 5.4 };
 
-  const kitchenCol: Column = { rooms: [room("kitchen", "Kitchen", s), room("utility", "Utility", s, "utility", { optional: true })] };
-  const svc: Unit[] = [{ cols: [kitchenCol], pin: "end" }, single(room("dining", "Dining", s), "end")];
+  const kitchenCol: Column = {
+    rooms: trim >= 2 ? [room("kitchen", "Kitchen & Dining", s, "kitchen_dining")]
+      : trim >= 1 ? [room("kitchen", "Kitchen", s)]
+        : [room("kitchen", "Kitchen", s), room("utility", "Wash Area", s, "utility", { optional: true })],
+  };
+  const svc: Unit[] = [{ cols: [kitchenCol], pin: "end" }];
+  if (trim < 2) svc.push(single(room("dining", "Dining", s), "end"));
+  svc.push(...poojaUnits);
   // Guest powder room near the entrance (off the living room, never the
   // kitchen) — only when the bedrooms and their baths are upstairs.
-  if (req.floors > 1) {
+  if (req.floors > 1 && trim < 1) {
     pub.push({ cols: [{ rooms: [room("toilet", "Powder Room", s), room("store", "Store", s, "store", { optional: true })] }], pin: "end" });
   }
   let stairBand = -1;
-  if (req.floors > 1) {
-    svc.push({ cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: STAIR_W }], pin: "end" });
+  if (stairFront && porch) stairBand = 0;
+  else if (req.floors > 1) {
+    svc.push({ cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: stairW }], pin: "end" });
   }
+  if (pub.length) bands.push(pubBand);
   bands.push({ kind: "service", units: svc, minD: req.floors > 1 ? STAIR_MIN_D : 3.0, maxD: 5.0 });
-  if (req.floors > 1) stairBand = bands.length - 1;
+  if (req.floors > 1 && stairBand < 0) stairBand = bands.length - 1;
 
-  return { bands, stairBand, privateUnits: privateUnits(req, 0, s) };
+  return { bands, stairBand, privateUnits: privateUnits(req, 0, s, trim) };
 }
 
 /** Upper floor: [balcony] → bedrooms → lounge + stair → [corridor → bedrooms] → [terrace]. */
 // Note: the ground floor puts its stair last in the service band, so upper stairs pin "end" too.
-export function upperProgram(req: Requirements, floor: number, fit = 1): FloorProgram {
+export function upperProgram(req: Requirements, floor: number, fit = 1, trim: Trim = 0, stairW = STAIR_W): FloorProgram {
   const s = scale(req, fit);
   const balconies = balconiesPerFloor(req.balconies, req.floors)[floor] ?? 0;
-  const units = privateUnits(req, floor, s);
+  const units = privateUnits(req, floor, s, trim);
   const bands: Band[] = [];
   if (balconies > 0) {
     bands.push({ kind: "balcony", units: [single(room("balcony", "Balcony", s))], fixedD: BALCONY_D, minD: BALCONY_D, maxD: BALCONY_D });
@@ -264,7 +307,7 @@ export function upperProgram(req: Requirements, floor: number, fit = 1): FloorPr
   // The stair continues on every upper floor (the top flight leads to the roof).
   const stairUnits: Unit[] = [
     single(lounge, "start"),
-    { cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: STAIR_W }], pin: "end" },
+    { cols: [{ rooms: [room("stair", "Staircase", s)], fixedW: stairW }], pin: "end" },
   ];
   bands.push({ kind: "stair", units: stairUnits, minD: STAIR_MIN_D, maxD: 6.0 });
   return { bands, stairBand: bands.length - 1, privateUnits: units };

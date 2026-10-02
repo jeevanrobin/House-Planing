@@ -26,6 +26,7 @@ import { getPlan } from "@/lib/data/projects";
 import { readHandoff } from "@/lib/data/handoff";
 import { exportPDF, exportPNG, exportSVG } from "@/lib/export";
 import type { PlanResult, Requirements, Suggestion } from "@/lib/floorplan/types";
+import { planSubtitle, planTitle } from "@/lib/floorplan/units";
 
 type Stage = "choose" | "plot" | "requirements" | "result";
 
@@ -294,8 +295,8 @@ export default function PlannerPage() {
                   floor={plan.floors[active]}
                   site={plan.site}
                   meta={{
-                    project: `${req.bedrooms} BHK Residence`,
-                    subtitle: `${Math.round(plan.plotArea * 10.764).toLocaleString("en-IN")} sq ft plot · ${req.facing}-facing`,
+                    project: planTitle(req),
+                    subtitle: planSubtitle(req, plan.plotArea),
                     date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
                   }}
                   view={view}
@@ -312,8 +313,8 @@ export default function PlannerPage() {
                   {[{ f: plan.floors[0], v: "site" as const }, ...plan.floors.map((f) => ({ f, v: "plan" as const }))].map(({ f, v }, i) => (
                     <FloorPlanCanvas key={i} floor={f} site={plan.site} view={v} palette="light"
                       meta={{
-                        project: `${req.bedrooms} BHK Residence`,
-                        subtitle: `${Math.round(plan.plotArea * 10.764).toLocaleString("en-IN")} sq ft plot · ${req.facing}-facing${v === "site" ? " · Site plan" : ""}`,
+                        project: planTitle(req),
+                        subtitle: `${planSubtitle(req, plan.plotArea)}${v === "site" ? " · Site plan" : ""}`,
                         date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
                       }} />
                   ))}

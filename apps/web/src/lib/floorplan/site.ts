@@ -34,9 +34,9 @@ export interface PlotFrame {
   world: Polygon;
   area: number;
   /**
-   * The drawing is rotated so the road frontage is square to the sheet, as
-   * an architect would orient it. True north points this many degrees
-   * clockwise from "up" on the sheet (0 for plain rectangular plots).
+   * The drawing is turned so the road runs along the bottom of the sheet and
+   * the frontage is square to it, as Indian plans are drawn. True north
+   * points this many degrees clockwise from "up" on the sheet.
    */
   northDeg: number;
 }
@@ -156,34 +156,35 @@ const rotate = ([x, y]: [number, number], deg: number): [number, number] => {
   return [x * Math.cos(t) - y * Math.sin(t), x * Math.sin(t) + y * Math.cos(t)];
 };
 
+const CARD_BEARING: Record<Cardinal, number> = { N: 0, E: 90, S: 180, W: 270 };
+
+/** Rotation (clockwise, degrees) that turns a frontage with this bearing to face the bottom of the sheet. */
+function roadDownRotation(frontage: number): number {
+  let rot = ((180 - frontage) % 360 + 540) % 360 - 180;
+  const square = Math.round(rot / 90) * 90;
+  if (Math.abs(rot - square) < 1.5) rot = square;
+  return rot === -180 ? 180 : rot;
+}
+
 export function makePlotFrame(req: Requirements): PlotFrame {
   if (req.plotPolygon && req.plotPolygon.length >= 3) {
     // Map metres are y-north; the drawing frame is y-down.
     const flipped: Polygon = req.plotPolygon.map(([x, y]) => [x, -y]);
-    // Square the road frontage to the sheet: rotate by the frontage's offset
-    // from the nearest compass direction.
-    const fb = frontageBearing(flipped, req.facing);
-    let delta = 0;
-    let road = roadSideOf(req.facing);
-    if (fb !== null) {
-      const card = Math.round(fb / 90) % 4;
-      road = (["N", "E", "S", "W"] as const)[card];
-      delta = ((fb - card * 90 + 540) % 360) - 180;
-      if (Math.abs(delta) < 1.5) delta = 0;
-    }
-    const turned: Polygon = flipped.map((p) => rotate(p, -delta));
+    // Turn the plot so its road frontage lies square along the bottom of the sheet.
+    const fb = frontageBearing(flipped, req.facing) ?? CARD_BEARING[roadSideOf(req.facing)];
+    const rot = roadDownRotation(fb);
+    const turned: Polygon = flipped.map((p) => rotate(p, rot));
     const bb = polygonBBox(turned);
     const world: Polygon = turned.map(([x, y]) => [x - bb.x, y - bb.y]);
-    const horizontalRoad = road === "N" || road === "S";
-    const base = { road, bx: 0, by: 0, pw: horizontalRoad ? bb.w : bb.h, pd: horizontalRoad ? bb.h : bb.w };
+    const base = { road: "S" as const, bx: 0, by: 0, pw: bb.w, pd: bb.h };
     const local = world.map((p) => toLocalPoint(base, p));
-    return { ...base, local, world, area: polygonArea(world), northDeg: -delta };
+    return { ...base, local, world, area: polygonArea(world), northDeg: rot };
   }
-  const road = roadSideOf(req.facing);
   const pw = req.plotWidth;
   const pd = req.plotDepth;
   const local: Polygon = [[0, 0], [pw, 0], [pw, pd], [0, pd]];
-  const frame = { road, bx: 0, by: 0, pw, pd, local, world: [] as Polygon, area: pw * pd, northDeg: 0 };
+  const northDeg = roadDownRotation(CARD_BEARING[roadSideOf(req.facing)]);
+  const frame = { road: "S" as Cardinal, bx: 0, by: 0, pw, pd, local, world: [] as Polygon, area: pw * pd, northDeg };
   frame.world = local.map((p) => toWorldPoint(frame, p));
   return frame;
 }
@@ -316,9 +317,17 @@ export interface Setbacks {
   side: number;
 }
 
-/** Setbacks scale gently with plot size (typical Indian bye-law ranges). */
+/**
+ * Setbacks by frontage, in typical Indian bye-law ranges. Small plots are
+ * built close to the boundary (a 20 ft plot can't give up 6 ft to side
+ * margins); larger plots scale gently.
+ */
 export function setbacksFor(pw: number, pd: number): Setbacks {
-  const side = Math.min(3, Math.max(0.9, Math.min(pw, pd) * 0.075));
+  const frontage = Math.min(pw, pd);
+  if (frontage < 7.5) return { front: 1.0, rear: 0.6, side: 0.45 }; // up to ~24 ft
+  if (frontage < 10.5) return { front: 1.5, rear: 0.75, side: 0.6 }; // ~25–34 ft
+  if (frontage < 13.5) return { front: 1.5, rear: 0.9, side: 0.9 }; // ~35–44 ft
+  const side = Math.min(3, Math.max(0.9, frontage * 0.075));
   return { front: Math.max(1.5, side * 1.5), rear: side, side };
 }
 
