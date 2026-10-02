@@ -16,7 +16,10 @@ const TYPES: { value: BuildingType; title: string; desc: string }[] = [
   { value: "house", title: "Independent house", desc: "One home, on one floor or more." },
   { value: "duplex", title: "Duplex", desc: "One family over two floors — living below, bedrooms above." },
   { value: "rental", title: "Floors for rent", desc: "A separate home on every floor, with a staircase from outside." },
+  { value: "cottage", title: "Cottage", desc: "Single storey, rooms round a dining hall, verandahs outside." },
+  { value: "manduva", title: "Manduva house", desc: "Single storey, rooms round an open courtyard. Needs ~45×55 ft." },
 ];
+const SINGLE_STOREY: BuildingType[] = ["cottage", "manduva"];
 /** Common Indian plot sizes in feet (width along the road × depth). */
 const PRESETS: [number, number][] = [[20, 30], [20, 40], [25, 50], [30, 40], [30, 50], [40, 60], [50, 80]];
 
@@ -162,7 +165,7 @@ export function RequirementWizard({
           {step === 0 && (
             <div className="space-y-4">
               <Field label="What are you building?">
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {TYPES.map((t) => {
                     const active = (req.buildingType ?? "house") === t.value;
                     return (
@@ -171,7 +174,8 @@ export function RequirementWizard({
                           ...r,
                           buildingType: t.value,
                           // A duplex is two floors; rental homes need at least two.
-                          floors: t.value === "duplex" ? 2 : t.value === "rental" ? Math.max(2, r.floors) : r.floors,
+                          floors: t.value === "duplex" ? 2 : t.value === "rental" ? Math.max(2, r.floors)
+                            : SINGLE_STOREY.includes(t.value) ? 1 : r.floors,
                         }))}
                         className={cn("rounded-md border p-3 text-left transition-colors",
                           active ? "border-primary bg-accent text-accent-foreground" : "hover:bg-secondary/60")}>
@@ -228,7 +232,7 @@ export function RequirementWizard({
                 <Segmented value={req.facing} onChange={(v) => set("facing", v)}
                   options={FACINGS.map((f) => ({ label: f, value: f }))} />
               </Field>
-              {req.buildingType !== "duplex" && (
+              {req.buildingType !== "duplex" && !SINGLE_STOREY.includes(req.buildingType ?? "house") && (
                 <Stepper label={req.buildingType === "rental" ? "Floors (one home each)" : "Number of floors"}
                   value={req.floors} min={req.buildingType === "rental" ? 2 : 1} max={4} onChange={(v) => set("floors", v)} />
               )}

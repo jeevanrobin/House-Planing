@@ -16,7 +16,7 @@
  *  6. Site      – parking, pool and garden go in the open land around the house.
  */
 import {
-  BALCONY_D, CAR_W, STAIR_W_NARROW, groundProgram, rentalUpperProgram, stairWidthFor, upperProgram,
+  BALCONY_D, CAR_W, STAIR_W_NARROW, groundProgram, rentalUpperProgram, ringProgram, stairWidthFor, upperProgram,
   type Band, type Trim, type FloorProgram, type RoomSpec, type Unit,
 } from "./program";
 import {
@@ -24,6 +24,7 @@ import {
   type Extent, type Placed,
 } from "./layout";
 import { placeOpenings, sharedWall } from "./openings";
+import { layoutRing, type RingKind } from "./ring";
 import { insetPolygon, polygonArea } from "./polygon-ops";
 import {
   buildableEnvelope, buildableRect, makePlotFrame, planSite, setbacksFor, toWorldRect,
@@ -809,6 +810,17 @@ function mirrored(frame: PlotFrame): PlotFrame {
 }
 
 export function generatePlan(req: Requirements): PlanResult {
+  if (req.buildingType === "manduva" || req.buildingType === "cottage") {
+    const ring = generateRing(req, req.buildingType);
+    if (ring) return ring;
+    // Too small for rooms around a courtyard / hall: a regular single-storey home instead.
+    const plain = generatePlan({ ...req, buildingType: "house", floors: 1 });
+    plain.suggestions.unshift({
+      kind: "space", severity: "warn",
+      message: `A ${req.buildingType === "manduva" ? "manduva (courtyard) house needs a plot of about 45 × 55 ft or more" : "cottage with verandahs needs a plot of about 40 × 45 ft or more"}, so this is planned as an independent house.`,
+    });
+    return plain;
+  }
   const plan = generateShaped(req);
   if (plan.floors.every((f) => f.rooms.length) || !req.plotPolygon) return plan;
   // Shape-following failed on an unusual plot: plan the largest rectangle inside it instead.
@@ -818,6 +830,41 @@ export function generatePlan(req: Requirements): PlanResult {
   const rectPlan = generateShaped({ ...req, plotPolygon: undefined, plotWidth: r.w + 2 * sb.side, plotDepth: r.h + sb.front + sb.rear });
   rectPlan.suggestions.push({ kind: "space", severity: "warn", message: "This plot's outline is unusual, so the plan uses the largest regular area inside it." });
   return rectPlan;
+}
+
+const RING_NOTES: Record<RingKind, string> = {
+  manduva: "A manduva house: rooms around an open courtyard, each opening onto the verandah that runs round it. The courtyard brings light and air to every room.",
+  cottage: "A cottage: rooms around a central dining hall, with verandahs on the front and sides. Best with a sloped tiled roof.",
+};
+
+/** Courtyard (manduva) and central-hall (cottage) homes — single storey, rooms in a ring. */
+function generateRing(req: Requirements, kind: RingKind): PlanResult | null {
+  const r1: Requirements = { ...req, floors: 1 };
+  const frame = makePlotFrame(r1);
+  const sb = setbacksFor(frame.pw, frame.pd);
+  const area = buildableRect(frame, sb);
+  let best: { rooms: Room[]; house: Rect; placement: Placement; fit: number; score: number } | null = null;
+  for (const fit of [1, 0.9, 0.8]) {
+    for (const mirror of [false, true]) {
+      const placement: Placement = { frame, y0: 0, mirror };
+      const compass = (x: number, y: number, house: Rect) => {
+        const p = toWorld(placement, { x, y, w: 0, h: 0 });
+        return directionOf(p.x, p.y, toWorld(placement, house), frame.northDeg);
+      };
+      const lay = layoutRing(kind, ringProgram(r1, fit), area, compass, r1.parking > 0 ? 5.6 : 0);
+      if (!lay) return null;
+      const rooms = toRooms(lay.placed, placement);
+      const cramped = lay.placed.filter((p) => isCramped(p.spec, p.w, p.h)).length;
+      const score = floorScore(rooms, toWorld(placement, lay.house), r1, frame.northDeg) - cramped;
+      if (!best || score > best.score + 1e-9) best = { rooms, house: lay.house, placement, fit, score };
+    }
+    if (best && best.score > -1) break;
+  }
+  const b = best!;
+  return assemble(r1, frame, sb, b.placement, [b.rooms], [[b.house]], {
+    porch: false, fit: b.fit, trim: 0,
+    notes: [{ kind: "space", severity: "good", message: RING_NOTES[kind] }],
+  });
 }
 
 function generateShaped(req: Requirements): PlanResult {
@@ -878,15 +925,32 @@ function generateShaped(req: Requirements): PlanResult {
   }
 
   const { cand, placement, fit, trim, rects } = chosen!;
+  const floorRects = [rects, ...cand.uppers.map((_, i) => bandRects(cand.uDepths[i], cand.uExt[i], cand.y0))];
+  return assemble(req, frame, sb, placement, chosen!.floors, floorRects, {
+    porch: cand.porch, fit, trim, depth: cand.k < 1 ? { need: cand.D, have: cand.D * cand.k } : undefined,
+  });
+}
+
+interface AssemblyInfo {
+  porch: boolean;
+  fit: number;
+  trim: Trim;
+  /** The plot was too shallow and rooms were compressed. */
+  depth?: { need: number; have: number };
+  notes?: Suggestion[];
+}
+
+/** Turn placed rooms into the final plan: doors, walls, metrics, site plan, suggestions, validation. */
+function assemble(req: Requirements, frame: PlotFrame, sb: Setbacks, placement: Placement, floorRooms: Room[][], floorRects: Rect[][], info: AssemblyInfo): PlanResult {
+  const rects = floorRects[0];
   const toWorldPt = ([x, y]: [number, number]) => {
     const r = toWorld(placement, { x, y, w: 0, h: 0 });
     return [r.x, r.y] as [number, number];
   };
-  const groundOutline = outline(rects).map(toWorldPt);
   const fp = bboxOf(rects.map((r) => toWorld(placement, r)));
-  const floorOutlines = [groundOutline, ...cand.uppers.map((_, i) => outline(bandRects(cand.uDepths[i], cand.uExt[i], cand.y0)).map(toWorldPt))];
+  const floorOutlines = floorRects.map((rs) => outline(rs).map(toWorldPt));
 
-  const floors: FloorPlan[] = chosen!.floors.map((rooms, i) => {
+  const floors: FloorPlan[] = floorRooms.map((rooms, i) => {
     const access: FloorAccess | undefined = req.buildingType === "rental" && req.floors > 1 ? (i === 0 ? "stairOutside" : "fromStair") : undefined;
     const { doors, windows } = placeOpenings(rooms, fp, frame.road, access);
     const walls = generateWalls(rooms);
@@ -905,7 +969,7 @@ function generateShaped(req: Requirements): PlanResult {
     };
   });
 
-  const siteReq = cand.porch ? { ...req, parking: 0 as const } : req;
+  const siteReq = info.porch ? { ...req, parking: 0 as const } : req;
   const siteFrame = placement.mirror ? mirrored(frame) : frame;
   const site = planSite(siteFrame, bbox(rects), siteReq, sb, rects);
   const envRect = buildableEnvelope(frame, sb);
@@ -932,34 +996,38 @@ function generateShaped(req: Requirements): PlanResult {
   if (req.buildingType === "rental" && req.floors > 1) {
     result.suggestions.push({ kind: "circulation", severity: "good", message: `${req.floors} separate ${req.bedrooms} BHK homes, one per floor. The staircase rises from outside at the front, so each home has its own front door.` });
   }
-  if (cand.porch) {
+  if (info.porch) {
     result.suggestions.push({ kind: "space", severity: "info", message: "Cars park in a covered porch at the front of the house, under the floor above." });
   }
-  if (trim >= 1) {
+  if (info.trim >= 1) {
     result.suggestions.push({
       kind: "space", severity: "info",
-      message: trim >= 2
+      message: info.trim >= 2
         ? "Planned as a compact home for this plot: a hall and a kitchen-dining, 4'×7' bathrooms, and a pooja niche instead of a separate room."
         : "Planned without a powder room, stores or dressing rooms so the main rooms keep their size on this plot.",
     });
   }
-  if (fit < 1) {
-    result.suggestions.push({ kind: "space", severity: "info", message: `Rooms were sized compactly (about ${Math.round(fit * 100)}% of the usual size for this finish level) to fit the plot.` });
-  } else if (fit > 1) {
-    result.suggestions.push({ kind: "space", severity: "good", message: `The plot is generous, so rooms are about ${Math.round((fit - 1) * 100)}% larger than a standard home of this finish level.` });
+  if (info.fit < 1) {
+    result.suggestions.push({ kind: "space", severity: "info", message: `Rooms were sized compactly (about ${Math.round(info.fit * 100)}% of the usual size for this finish level) to fit the plot.` });
+  } else if (info.fit > 1) {
+    result.suggestions.push({ kind: "space", severity: "good", message: `The plot is generous, so rooms are about ${Math.round((info.fit - 1) * 100)}% larger than a standard home of this finish level.` });
   }
   if (rects.some((r) => Math.abs(r.x - rects[0].x) > 0.05 || Math.abs(r.w - rects[0].w) > 0.05)) {
     result.suggestions.push({ kind: "space", severity: "info", message: "The house steps in where the plot narrows, so it follows the shape of your land instead of a plain rectangle." });
   }
-  if (cand.k < 1) {
-    warnings.push(`The brief needs ${(cand.D).toFixed(1)} m of depth but the plot allows ${(cand.D * cand.k).toFixed(1)} m, so rooms were compressed.`);
+  if (info.depth) {
+    warnings.push(`The brief needs ${info.depth.need.toFixed(1)} m of depth but the plot allows ${info.depth.have.toFixed(1)} m, so rooms were compressed.`);
   }
+  result.suggestions.push(...(info.notes ?? []));
   result.suggestions = [...buildSuggestions(result, req, warnings), ...result.suggestions];
   result.validation = validatePlanRequirements(result, req);
-  if (!result.validation.ok && req.floors < 4) {
+  const ring = req.buildingType === "manduva" || req.buildingType === "cottage";
+  if (!result.validation.ok && (ring || req.floors < 4)) {
     result.suggestions.unshift({
       kind: "space", severity: "warn",
-      message: `${req.bedrooms} bedrooms don't fit comfortably on ${req.floors === 1 ? "one floor" : `${req.floors} floors`} of this plot. Add a floor or plan one bedroom fewer for full-size rooms.`,
+      message: ring
+        ? `${req.bedrooms} bedrooms don't fit comfortably around the ${req.buildingType === "manduva" ? "courtyard" : "hall"} on this plot. Plan one bedroom fewer, or use a larger plot.`
+        : `${req.bedrooms} bedrooms don't fit comfortably on ${req.floors === 1 ? "one floor" : `${req.floors} floors`} of this plot. Add a floor or plan one bedroom fewer for full-size rooms.`,
     });
   }
   return result;

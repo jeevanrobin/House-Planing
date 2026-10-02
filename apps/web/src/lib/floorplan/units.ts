@@ -25,7 +25,7 @@ const FACING_NAME: Record<Facing, string> = {
 /** "30′×50′ East-facing house" (rectangular plots) or "East-facing house" (map-drawn plots). */
 export function planTitle(req: Requirements): string {
   const size = req.plotPolygon ? "" : `${plotFt(req.plotWidth)}×${plotFt(req.plotDepth)} `;
-  const kind = req.buildingType === "duplex" ? "duplex" : req.buildingType === "rental" ? "rental building" : "house";
+  const kind = { duplex: "duplex", rental: "rental building", cottage: "cottage", manduva: "manduva house", house: "house" }[req.buildingType ?? "house"];
   return `${size}${FACING_NAME[req.facing]}-facing ${kind}`;
 }
 
