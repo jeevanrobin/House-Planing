@@ -18,6 +18,7 @@ class Requirements(BaseModel):
     plotUse: Literal["balanced", "max"] | None = None
     buildingType: Literal["house", "duplex", "rental", "cottage", "manduva", "apartment"] | None = None
     flatsPerFloor: Literal[2, 3, 4] | None = None
+    drainage: Literal["sewer", "septic"] | None = None
     bedrooms: int = Field(ge=1, le=10)
     bathrooms: int = Field(ge=1, le=10)
     parking: int = Field(ge=0, le=3)
