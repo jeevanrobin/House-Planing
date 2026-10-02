@@ -237,8 +237,8 @@ export const PlotMap = React.forwardRef<PlotMapHandle, Props>(function PlotMap(
   }, [mapType]);
 
   return (
-    <div className={cn("relative overflow-hidden rounded-2xl border", className)}>
-      <div className="absolute left-3 top-3 z-10 flex w-[min(420px,calc(100%-1.5rem))] items-center gap-2 rounded-xl glass-strong px-3 py-2 shadow-glass">
+    <div className={cn("relative overflow-hidden rounded-lg border", className)}>
+      <div className="absolute left-3 top-3 z-10 flex w-[min(420px,calc(100%-1.5rem))] items-center gap-2 rounded-md glass-strong px-3 py-2 shadow-glass">
         <Search className="size-4 shrink-0 text-muted-foreground" />
         <input
           ref={searchInput}
@@ -253,7 +253,7 @@ export const PlotMap = React.forwardRef<PlotMapHandle, Props>(function PlotMap(
         </div>
       )}
 
-      <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-xl glass-strong p-1 shadow-glass">
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-md glass-strong p-1 shadow-glass">
         <Layers className="ml-1 size-4 text-muted-foreground" />
         {MAP_TYPES.map((m) => (
           <button
@@ -272,7 +272,7 @@ export const PlotMap = React.forwardRef<PlotMapHandle, Props>(function PlotMap(
       <button
         onClick={goToCurrentLocation}
         title="Go to my location"
-        className="absolute bottom-4 right-3 z-10 flex size-10 items-center justify-center rounded-xl glass-strong shadow-glass transition-colors hover:bg-secondary/60"
+        className="absolute bottom-4 right-3 z-10 flex size-10 items-center justify-center rounded-md glass-strong shadow-glass transition-colors hover:bg-secondary/60"
       >
         <LocateFixed className={cn("size-5 text-muted-foreground", locating && "animate-pulse text-primary")} />
       </button>

@@ -133,7 +133,7 @@ export function PlotSelector({
         )}
 
         {mapError && (
-          <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
+          <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
             <AlertTriangle className="size-4" /> {mapError} — using offline drawing mode.
           </div>
         )}
@@ -148,7 +148,7 @@ export function PlotSelector({
         />
 
         {points.length > 0 && !validation.ok && validation.error && (
-          <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertTriangle className="size-4 shrink-0" /> {validation.error}
           </div>
         )}

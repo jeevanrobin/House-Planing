@@ -102,8 +102,8 @@ export const PlotMapFallback = React.forwardRef<PlotMapHandle, Props>(
       : "";
 
     return (
-      <div className={cn("relative overflow-hidden rounded-2xl border bg-card", className)}>
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-xl glass-strong px-3 py-2 text-xs text-muted-foreground shadow-glass">
+      <div className={cn("relative overflow-hidden rounded-lg border bg-card", className)}>
+        <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-md glass-strong px-3 py-2 text-xs text-muted-foreground shadow-glass">
           <MousePointerClick className="size-3.5" />
           {drawing ? "Click to add corner points" : "Demo mode — no Maps key"}
           <button onClick={loadDemo} className="ml-1 rounded-md bg-primary px-2 py-0.5 font-medium text-primary-foreground">

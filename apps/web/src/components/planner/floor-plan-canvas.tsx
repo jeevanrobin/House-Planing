@@ -113,6 +113,8 @@ interface Props {
   floor: FloorPlan;
   site: SitePlan;
   meta?: SheetMeta;
+  /** Force a palette (e.g. "light" for printing); defaults to the current theme. */
+  palette?: "light" | "blueprint";
   /** "plan" frames the house; "site" shows the whole plot. */
   view?: "plan" | "site";
   editable?: boolean;
@@ -130,9 +132,9 @@ function ftIn(m: number): string {
   return `${Math.floor(totalIn / 12)}′${totalIn % 12}″`;
 }
 
-export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className }: Props) {
+export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = false, className, palette }: Props) {
   const { resolvedTheme } = useTheme();
-  const C = resolvedTheme === "dark" ? BLUEPRINT : LIGHT;
+  const C = (palette ?? (resolvedTheme === "dark" ? "blueprint" : "light")) === "blueprint" ? BLUEPRINT : LIGHT;
   const fp = floor.footprint;
   const isGround = floor.floor === 0;
   const bb = polygonBBox(site.plot);
@@ -246,7 +248,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
           <Button size="sm" variant="outline" onClick={undo} disabled={!past.length}><Undo2 /> Undo</Button>
           <Button size="sm" variant="outline" onClick={redo} disabled={!future.length}><Redo2 /> Redo</Button>
           {sel && (
-            <div className="flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-sm">
+            <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm">
               <Maximize2 className="size-4 text-muted-foreground" />
               <select value={sel.type} onChange={(e) => changeType(sel.id, e.target.value as RoomType)}
                 className="rounded-md border bg-background px-2 py-1 text-sm capitalize">
@@ -258,7 +260,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
         </div>
       )}
 
-      <div className="overflow-hidden rounded-2xl border shadow-sm">
+      <div className="overflow-hidden rounded-lg border shadow-sm">
         <svg
           ref={svgRef}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
