@@ -301,7 +301,7 @@ export default function PlannerPage() {
                 </div>
               </div>
 
-              {view === "3d" ? <Plan3D plan={plan} /> : view === "services" ? (
+              {view === "3d" ? <Plan3D plan={plan} roofStyle={req.buildingType === "cottage" || req.buildingType === "manduva" ? "sloped" : "flat"} /> : view === "services" ? (
               <div ref={canvasWrap}>
                 <ServicesSheet plan={plan} req={req} meta={{
                   project: planTitle(req),
