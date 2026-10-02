@@ -32,6 +32,9 @@ export type RoomType =
   | "lounge"
   | "terrace";
 
+export type BuildingType = "house" | "duplex" | "rental";
+export type FloorAccess = "stairOutside" | "fromStair";
+
 export type Zone = "public" | "service" | "private" | "circulation" | "outdoor";
 
 export interface Requirements {
@@ -50,6 +53,13 @@ export interface Requirements {
    * Defaults to "max" for map-drawn plots, "balanced" otherwise.
    */
   plotUse?: "balanced" | "max";
+  /**
+   * "house": one home over one or more floors (default).
+   * "duplex": one family over two floors — living below, bedrooms above.
+   * "rental": every floor is a separate home with its own hall and kitchen,
+   *   reached by a stair from outside; bedrooms/bathrooms are per floor.
+   */
+  buildingType?: BuildingType;
 
   // Step 2
   bedrooms: number;
@@ -135,6 +145,11 @@ export interface FloorPlan {
   name: string;
   /** Which side of the footprint faces the road (for the entrance). */
   roadSide?: "N" | "E" | "S" | "W";
+  /**
+   * Separate homes per floor: on the ground floor the stair is reached only
+   * from outside ("stairOutside"); upper homes are entered from it ("fromStair").
+   */
+  access?: FloorAccess;
   footprint: Rect;
   /** The actual polygon boundary of the buildable footprint (if polygon mode). */
   footprintPolygon?: Polygon;

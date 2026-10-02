@@ -3,7 +3,7 @@
 import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Sparkles } from "lucide-react";
-import type { Facing, Requirements } from "@/lib/floorplan/types";
+import type { BuildingType, Facing, Requirements } from "@/lib/floorplan/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,12 @@ const FACINGS: Facing[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const STEPS = ["Plot & Floors", "Rooms", "Lifestyle", "Style & Budget"];
 
 const FT = 0.3048;
+
+const TYPES: { value: BuildingType; title: string; desc: string }[] = [
+  { value: "house", title: "Independent house", desc: "One home, on one floor or more." },
+  { value: "duplex", title: "Duplex", desc: "One family over two floors — living below, bedrooms above." },
+  { value: "rental", title: "Floors for rent", desc: "A separate home on every floor, with a staircase from outside." },
+];
 /** Common Indian plot sizes in feet (width along the road × depth). */
 const PRESETS: [number, number][] = [[20, 30], [20, 40], [25, 50], [30, 40], [30, 50], [40, 60], [50, 80]];
 
@@ -155,6 +161,27 @@ export function RequirementWizard({
         >
           {step === 0 && (
             <div className="space-y-4">
+              <Field label="What are you building?">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {TYPES.map((t) => {
+                    const active = (req.buildingType ?? "house") === t.value;
+                    return (
+                      <button key={t.value} type="button" aria-pressed={active}
+                        onClick={() => setReq((r) => ({
+                          ...r,
+                          buildingType: t.value,
+                          // A duplex is two floors; rental homes need at least two.
+                          floors: t.value === "duplex" ? 2 : t.value === "rental" ? Math.max(2, r.floors) : r.floors,
+                        }))}
+                        className={cn("rounded-md border p-3 text-left transition-colors",
+                          active ? "border-primary bg-accent text-accent-foreground" : "hover:bg-secondary/60")}>
+                        <span className="block text-sm font-semibold">{t.title}</span>
+                        <span className="mt-0.5 block text-xs text-muted-foreground">{t.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
               {!req.plotPolygon && (
                 <Field label="Standard plot sizes (ft)">
                   <div className="flex flex-wrap gap-2">
@@ -201,7 +228,10 @@ export function RequirementWizard({
                 <Segmented value={req.facing} onChange={(v) => set("facing", v)}
                   options={FACINGS.map((f) => ({ label: f, value: f }))} />
               </Field>
-              <Stepper label="Number of floors" value={req.floors} min={1} max={4} onChange={(v) => set("floors", v)} />
+              {req.buildingType !== "duplex" && (
+                <Stepper label={req.buildingType === "rental" ? "Floors (one home each)" : "Number of floors"}
+                  value={req.floors} min={req.buildingType === "rental" ? 2 : 1} max={4} onChange={(v) => set("floors", v)} />
+              )}
               {req.plotPolygon && (
                 <Field label="How much of the plot should the house use?">
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -227,8 +257,11 @@ export function RequirementWizard({
 
           {step === 1 && (
             <div className="space-y-3">
-              <Stepper label="Bedrooms" value={req.bedrooms} min={1} max={8} onChange={(v) => set("bedrooms", v)} />
-              <Stepper label="Bathrooms" value={req.bathrooms} min={1} max={8} onChange={(v) => set("bathrooms", v)} />
+              {req.buildingType === "rental" && (
+                <p className="text-sm text-muted-foreground">Rooms for <b className="text-foreground">each</b> home — every floor gets the same.</p>
+              )}
+              <Stepper label={req.buildingType === "rental" ? "Bedrooms per home" : "Bedrooms"} value={req.bedrooms} min={1} max={8} onChange={(v) => set("bedrooms", v)} />
+              <Stepper label={req.buildingType === "rental" ? "Bathrooms per home" : "Bathrooms"} value={req.bathrooms} min={1} max={8} onChange={(v) => set("bathrooms", v)} />
               <Stepper label="Parking (cars)" value={req.parking} min={0} max={3} onChange={(v) => set("parking", v as Requirements["parking"])} />
               <Stepper label="Balconies" value={req.balconies} min={0} max={6} onChange={(v) => set("balconies", v)} />
             </div>

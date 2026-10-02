@@ -16,7 +16,7 @@
  *  6. Site      – parking, pool and garden go in the open land around the house.
  */
 import {
-  BALCONY_D, CAR_W, groundProgram, stairWidthFor, upperProgram,
+  BALCONY_D, CAR_W, STAIR_W_NARROW, groundProgram, rentalUpperProgram, stairWidthFor, upperProgram,
   type Band, type Trim, type FloorProgram, type RoomSpec, type Unit,
 } from "./program";
 import {
@@ -31,7 +31,7 @@ import {
 } from "./site";
 import { directionOf, vastuRoomScore } from "./vastu";
 import { exteriorEdges, generateWalls } from "./walls";
-import type { FloorPlan, PlanResult, Polygon, Rect, Requirements, Room, Suggestion } from "./types";
+import type { FloorAccess, FloorPlan, PlanResult, Polygon, Rect, Requirements, Room, Suggestion } from "./types";
 
 export { placeOpenings } from "./openings";
 
@@ -93,42 +93,59 @@ function adjustGround(prog: FloorProgram, W: number): FloorProgram {
 const unitMinW = (u: Unit) => u.cols.reduce((a, c) => a + (c.fixedW ?? Math.max(...c.rooms.filter((r) => !r.optional).map((r) => r.minW), 0)), 0);
 const unitArea = (u: Unit) => u.cols.flatMap((c) => c.rooms).filter((r) => !r.optional).reduce((s, r) => s + r.area, 0);
 
-/** Put ground-floor bedrooms beside the living room when the front band has room. */
-function frontBedrooms(prog: FloorProgram, W: number): FloorProgram {
+/**
+ * Put ground-floor bedrooms beside the living room when the front band has
+ * room — and, in compact plans, beside the kitchen-dining too — so small
+ * single-storey homes need no bedroom wing behind a corridor. Bedrooms then
+ * open straight off the hall or dining, as on most 25–35 ft Indian plots.
+ */
+function frontBedrooms(prog: FloorProgram, W: number, compact = false): FloorProgram {
   const pub = prog.bands.find((b) => b.kind === "public");
   if (!pub || !prog.privateUnits.length) return prog;
-  const units = [...pub.units];
+  // Beside the kitchen only when it doubles as the dining room (a bedroom never opens off a kitchen).
+  const svc = prog.bands.find((b) => b.kind === "service"
+    && b.units.some((u) => u.cols[0].rooms[0].label === "Kitchen & Dining"));
+  const targets = [pub, ...(compact && svc ? [svc] : [])];
+  const units = new Map(targets.map((b) => [b, [...b.units]]));
   const rest: Unit[] = [];
   for (const u of prog.privateUnits) {
-    const isBed = u.cols[0].rooms[0].type === "bedroom" || u.cols[0].rooms[0].type === "master_bedroom";
+    const type = u.cols[0].rooms[0].type;
+    const isBed = type === "bedroom" || type === "master_bedroom";
     let placed = false;
-    for (const v of isBed ? [u, compactUnit(u)] : []) {
-      const trial = [...units, v];
-      // Fits if minimum widths fit and the band wouldn't need to be deeper than allowed.
-      const fitsWidth = trial.reduce((a, t) => a + unitMinW(t), 0) <= W + 1e-6;
-      const fitsDepth = trial.reduce((a, t) => a + unitArea(t), 0) / W <= pub.maxD;
-      if (fitsWidth && fitsDepth) {
-        units.push(v);
-        placed = true;
-        break;
+    for (const band of targets) {
+      // A common bath may open off the hall, never off the kitchen.
+      const variants = isBed ? [u, compactUnit(u)] : compact && type === "bathroom" && band === pub ? [u] : [];
+      for (const v of variants) {
+        const trial = [...units.get(band)!, v];
+        // Fits if minimum widths fit and the band wouldn't need to be deeper than allowed.
+        const fitsWidth = trial.reduce((a, t) => a + unitMinW(t), 0) <= W + 1e-6;
+        const fitsDepth = trial.reduce((a, t) => a + unitArea(t), 0) / W <= band.maxD;
+        if (fitsWidth && fitsDepth) {
+          units.get(band)!.push(v);
+          placed = true;
+          break;
+        }
       }
+      if (placed) break;
     }
     if (!placed) rest.push(u);
   }
   if (rest.length === prog.privateUnits.length) return prog;
-  return { ...prog, bands: prog.bands.map((b) => (b === pub ? { ...b, units } : b)), privateUnits: rest };
+  return { ...prog, bands: prog.bands.map((b) => (units.has(b) ? { ...b, units: units.get(b)! } : b)), privateUnits: rest };
 }
 
 
 function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boolean, ctx: SiteContext): FloorStructure & { stairBand: number } {
   // Narrow plots: the stair rises beside the car porch.
-  const stairFront = porch && req.floors > 1 && W < 7.5;
+  // Separate homes per floor always reach the stair from outside, at the front.
+  const stairFront = req.floors > 1 && (req.buildingType === "rental" || (porch && W < 7.5));
   // Wider plots: the living room sits beside the car rather than behind a sit-out.
   const livingFront = porch && !stairFront && W - req.parking * CAR_W >= 3.6;
   const raw = groundProgram(req, porch, ctx.fit, ctx.trim, stairFront, livingFront, stairWidthFor(W));
   // Tight plots can drop the sit-out (main door straight onto the front wall).
-  const base = ctx.noSitout && !porch ? { ...raw, bands: raw.bands.filter((b) => b.kind !== "sitout"), stairBand: raw.stairBand >= 0 ? raw.stairBand - 1 : -1 } : raw;
-  let prog = adjustGround(frontBedrooms(base, W), W);
+  // (Never when the stair rises beside the sit-out: that row is the way upstairs.)
+  const base = ctx.noSitout && !porch && !stairFront ? { ...raw, bands: raw.bands.filter((b) => b.kind !== "sitout"), stairBand: raw.stairBand >= 0 ? raw.stairBand - 1 : -1 } : raw;
+  let prog = adjustGround(frontBedrooms(base, W, (ctx.trim ?? 0) >= 2), W);
   // Living room beside the car: rooms in the row behind it (office, a bedroom)
   // would cut it off from the dining, so a passage runs through that row.
   if (livingFront) {
@@ -180,7 +197,42 @@ function groundStructure(req: Requirements, W: number, Wpriv: number, porch: boo
   return { bands: all, frozen: stairBand + 1, stairBand };
 }
 
-function upperStructure(req: Requirements, floor: number, W: number, Wrear: number, stairY: number, stairD: number, fit: number, maxUse = false, trim: Trim = 0): FloorStructure {
+/**
+ * Rental upper floor: the stair (at the front, as on the ground floor) with a
+ * bedroom or balcony beside it, then a complete home behind: hall, kitchen,
+ * bedrooms — the same rows as the ground-floor home.
+ */
+function rentalUpperStructure(req: Requirements, floor: number, W: number, stairD: number, stairW: number, fit: number, trim: Trim): FloorStructure {
+  const stairUnit = upperProgram(req, floor, fit, trim, stairW).bands.find((b) => b.kind === "stair")!.units
+    .find((u) => u.cols[0].rooms[0].type === "stair")!;
+  const home = adjustGround(frontBedrooms(rentalUpperProgram(req, floor, fit, trim), W, trim >= 2), W);
+  const { bands, overflow } = expandBands(home, W);
+  let rest = [...overflow, ...home.privateUnits];
+  // Over the porch / sit-out, beside the stair: a bedroom if one fits, else a balcony.
+  const room = W - stairW;
+  const i = rest.findIndex((u) => u.cols[0].rooms[0].type === "bedroom" && unitMinW(compactUnit(u)) <= room + 1e-6);
+  const beside: Unit = i >= 0
+    ? { ...compactUnit(rest[i]), pin: "start" }
+    : { cols: [{ rooms: [openSpec("balcony", "Balcony", room * stairD, `rbal-front-${floor}`)] }], pin: "start" };
+  if (i >= 0) rest = rest.filter((_, j) => j !== i);
+  const front: Band = { kind: "stair", units: [beside, { ...stairUnit, cols: [{ ...stairUnit.cols[0], fixedW: stairW }] }], fixedD: stairD, minD: stairD, maxD: stairD };
+  // The hallway must open onto a living space (as on the ground floor).
+  const ACCESSIBLE = new Set(["dining", "living", "lounge", "corridor"]);
+  if (rest.length) {
+    const last = bands[bands.length - 1];
+    const types = last.units.flatMap((u) => u.cols).flatMap((c) => c.rooms).map((r) => r.type);
+    if (last.fixedD === undefined && !types.some((t) => ACCESSIBLE.has(t))) {
+      bands[bands.length - 1] = { ...last, units: [...last.units, passageUnit()] };
+    }
+  }
+  const priv = privateBands(rest, W);
+  const all = [front, ...bands, ...priv];
+  all.push({ kind: "terrace", units: [{ cols: [{ rooms: [openSpec("terrace", "Open Terrace", 0, `rterr-${floor}`)] }] }], minD: 0, maxD: 99 });
+  return { bands: all, frozen: 1 };
+}
+
+function upperStructure(req: Requirements, floor: number, W: number, Wrear: number, stairY: number, stairD: number, fit: number, maxUse = false, trim: Trim = 0, stairW = stairWidthFor(W)): FloorStructure {
+  if (req.buildingType === "rental") return rentalUpperStructure(req, floor, W, stairD, stairW, fit, trim);
   const prog = upperProgram(req, floor, fit, trim, stairWidthFor(W));
   const balcony = prog.bands.find((b) => b.kind === "balcony");
   const stair = prog.bands[prog.stairBand];
@@ -200,7 +252,10 @@ function upperStructure(req: Requirements, floor: number, W: number, Wrear: numb
   if (stairY < 0.01) {
     const stairUnit = stair.units.find((u) => u.cols[0].rooms[0].type === "stair")!;
     const room = W - (stairUnit.cols[0].fixedW ?? 0);
-    const i = rearUnits.findIndex((u) => /bedroom/.test(u.cols[0].rooms[0].type) && unitMinW(compactUnit(u)) <= room + 1e-6);
+    // A regular bedroom takes the porch slot; the master keeps the larger rear room.
+    const fits = (u: Unit, type: string) => u.cols[0].rooms[0].type === type && unitMinW(compactUnit(u)) <= room + 1e-6;
+    let i = rearUnits.findIndex((u) => fits(u, "bedroom"));
+    if (i < 0) i = rearUnits.findIndex((u) => fits(u, "master_bedroom"));
     if (i >= 0) {
       stairUnits = [{ ...compactUnit(rearUnits[i]), pin: "start" }, stairUnit];
       rearUnits = rearUnits.filter((_, j) => j !== i);
@@ -443,7 +498,7 @@ function evaluateWidth(req: Requirements, W: number, ctx: SiteContext, porch: bo
   const uppers: FloorStructure[] = [];
   let D = depths.reduce((a, b) => a + b, 0);
   for (let f = 1; f < req.floors; f++) {
-    const st = upperStructure(req, f, Wfront, Number.isFinite(rearW) ? rearW : Wfront, stairY, stairD, ctx.fit, ctx.maxUse, ctx.trim);
+    const st = upperStructure(req, f, Wfront, Number.isFinite(rearW) ? rearW : Wfront, stairY, stairD, ctx.fit, ctx.maxUse, ctx.trim, porch && req.floors > 1 && (req.buildingType === "rental" || Wfront < 7.5) ? STAIR_W_NARROW : stairWidthFor(Wfront));
     uppers.push(st);
     const ue = upperExtents(st.bands.map((b) => targetDepth(b, Wfront)), depths, ext, st.bands);
     D = Math.max(D, st.bands.reduce((a, b, i) => a + targetDepth(b, ue[i].w), 0));
@@ -709,7 +764,7 @@ function isCramped(spec: RoomSpec, w: number, h: number): boolean {
 
 const MIN_ROOM_AREA: Partial<Record<string, number>> = {
   living: 10, lounge: 8, dining: 6, kitchen: 5, toilet: 1.5, pooja: 1.5, office: 6, stair: 6,
-  store: 1.2, utility: 1.2, master_bedroom: 10, bedroom: 8, bathroom: 2.5, dress: 1.2,
+  store: 1.2, utility: 1.2, master_bedroom: 9, bedroom: 8, bathroom: 2.5, dress: 1.2,
 };
 
 export function validatePlanRequirements(plan: PlanResult, req: Requirements): { ok: boolean; errors: string[] } {
@@ -731,8 +786,15 @@ export function validatePlanRequirements(plan: PlanResult, req: Requirements): {
   const count = (pred: (r: Room) => boolean) => all.filter(pred).length;
   const beds = count((r) => r.type === "bedroom" || r.type === "master_bedroom");
   const baths = count((r) => r.type === "bathroom");
-  if (beds !== req.bedrooms) errors.push(`Expected ${req.bedrooms} bedrooms, but generated ${beds}.`);
-  if (baths !== req.bathrooms) errors.push(`Expected ${req.bathrooms} bathrooms, but generated ${baths}.`);
+  // Rental: the brief is per home, one home per floor.
+  const homes = req.buildingType === "rental" ? req.floors : 1;
+  if (beds !== req.bedrooms * homes) errors.push(`Expected ${req.bedrooms * homes} bedrooms, but generated ${beds}.`);
+  if (baths !== req.bathrooms * homes) errors.push(`Expected ${req.bathrooms * homes} bathrooms, but generated ${baths}.`);
+  if (homes > 1) {
+    plan.floors.forEach((f) => {
+      if (!f.rooms.some((r) => r.type === "kitchen")) errors.push(`${f.name} has no kitchen of its own.`);
+    });
+  }
   if (req.homeOffice && !count((r) => r.type === "office")) errors.push("Home Office was requested but not generated.");
   return { ok: errors.length === 0, errors };
 }
@@ -825,12 +887,14 @@ function generateShaped(req: Requirements): PlanResult {
   const floorOutlines = [groundOutline, ...cand.uppers.map((_, i) => outline(bandRects(cand.uDepths[i], cand.uExt[i], cand.y0)).map(toWorldPt))];
 
   const floors: FloorPlan[] = chosen!.floors.map((rooms, i) => {
-    const { doors, windows } = placeOpenings(rooms, fp, frame.road);
+    const access: FloorAccess | undefined = req.buildingType === "rental" && req.floors > 1 ? (i === 0 ? "stairOutside" : "fromStair") : undefined;
+    const { doors, windows } = placeOpenings(rooms, fp, frame.road, access);
     const walls = generateWalls(rooms);
     return {
       floor: i,
       name: FLOOR_NAMES[i] ?? `Floor ${i}`,
       roadSide: frame.road,
+      access,
       footprint: fp,
       footprintPolygon: floorOutlines[i],
       rooms,
@@ -865,6 +929,9 @@ function generateShaped(req: Requirements): PlanResult {
     suggestions: [],
   };
   const warnings = [...site.warnings];
+  if (req.buildingType === "rental" && req.floors > 1) {
+    result.suggestions.push({ kind: "circulation", severity: "good", message: `${req.floors} separate ${req.bedrooms} BHK homes, one per floor. The staircase rises from outside at the front, so each home has its own front door.` });
+  }
   if (cand.porch) {
     result.suggestions.push({ kind: "space", severity: "info", message: "Cars park in a covered porch at the front of the house, under the floor above." });
   }

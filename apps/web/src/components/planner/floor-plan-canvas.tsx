@@ -157,7 +157,7 @@ export function FloorPlanCanvas({ floor, site, meta, view = "plan", editable = f
   }, [floor]);
 
   // Walls, doors and windows derive from the rooms, so edits stay consistent.
-  const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide), [rooms, fp, floor.roadSide]);
+  const openings = React.useMemo(() => placeOpenings(rooms, fp, floor.roadSide, floor.access), [rooms, fp, floor.roadSide, floor.access]);
   const walls = React.useMemo(() => generateWalls(rooms), [rooms]);
   const furniture = React.useMemo(
     () => rooms.flatMap((r) => furnish(r, openings.doors, openings.windows)),

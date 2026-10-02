@@ -16,6 +16,7 @@ class Requirements(BaseModel):
     floors: int = Field(ge=1, le=4)
     plotPolygon: list[Vertex] | None = Field(default=None, min_length=3, max_length=100)
     plotUse: Literal["balanced", "max"] | None = None
+    buildingType: Literal["house", "duplex", "rental"] | None = None
     bedrooms: int = Field(ge=1, le=10)
     bathrooms: int = Field(ge=1, le=10)
     parking: int = Field(ge=0, le=3)
