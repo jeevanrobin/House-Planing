@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { createProject, deleteProject, listProjects, unlockedProjects, type ProjectSummary } from "@/lib/data/projects";
 import { useUser } from "@/lib/supabase/use-user";
+import { UnlockButton } from "@/components/billing/unlock-button";
 
 export default function Dashboard() {
   const user = useUser();
@@ -113,6 +114,7 @@ export default function Dashboard() {
                     </span>
                   </Link>
                   {p.latestVastu !== null && <Badge>{p.latestVastu} Vastu</Badge>}
+                  {!pro.has(p.id) && <UnlockButton projectId={p.id} onUnlocked={load} />}
                   <Button variant="ghost" size="icon" aria-label={`Delete ${p.name}`} onClick={() => remove(p)}>
                     <Trash2 />
                   </Button>
@@ -130,7 +132,7 @@ export default function Dashboard() {
               </p>
               <p className="text-muted-foreground">
                 <b className="text-foreground">Pro · ₹499 per project</b>, once: the PDF drawing set, colour plan, front elevation and
-                plumbing &amp; drainage sheet. Unlock from any Pro sheet in the planner.
+                plumbing &amp; drainage sheet. Use <b className="text-foreground">Unlock Pro</b> on a project.
               </p>
             </CardContent>
           </Card>

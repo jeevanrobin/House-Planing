@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { deletePlan, getProject } from "@/lib/data/projects";
+import { isUnlocked } from "@/lib/billing";
+import { UnlockButton } from "@/components/billing/unlock-button";
 import { handoffFromPlot, writeHandoff } from "@/lib/data/handoff";
 
 type Project = NonNullable<Awaited<ReturnType<typeof getProject>>>;
@@ -19,8 +21,11 @@ export default function ProjectPage() {
   const [project, setProject] = React.useState<Project | null | undefined>();
   const [error, setError] = React.useState<string | null>(null);
 
+  const [pro, setPro] = React.useState<boolean | null>(null);
+
   React.useEffect(() => {
     getProject(id).then(setProject).catch((e: Error) => setError(e.message));
+    isUnlocked(id).then(setPro);
   }, [id]);
 
   const newPlan = () => {
@@ -54,8 +59,14 @@ export default function ProjectPage() {
           <>
             <p className="label-mono">Project</p>
             <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
-              <h1 className="font-display text-2xl font-bold tracking-tight">{project.name}</h1>
-              <Button onClick={newPlan}><Sparkles /> Generate a plan</Button>
+              <h1 className="flex items-center gap-2 font-display text-2xl font-bold tracking-tight">
+                {project.name}
+                {pro && <span className="rounded bg-accent px-1.5 py-0.5 font-mono text-xs font-semibold uppercase text-accent-foreground">Pro</span>}
+              </h1>
+              <div className="flex flex-wrap items-start gap-2">
+                {pro === false && <UnlockButton projectId={id} onUnlocked={() => setPro(true)} size="default" />}
+                <Button onClick={newPlan}><Sparkles /> Generate a plan</Button>
+              </div>
             </div>
 
             <div className="mt-6 grid gap-6 lg:grid-cols-[320px_1fr]">
