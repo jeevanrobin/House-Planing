@@ -113,7 +113,10 @@ describe("realistic layouts", () => {
     const fp = p.footprint;
     expect(fp.w * fp.h).toBeLessThan(0.25 * p.plotArea);
     expect(p.floors.flatMap((f) => f.rooms).some((r) => r.type === "pool" || r.type === "garden")).toBe(false);
-    expect(p.site.elements.map((e) => e.type).sort()).toEqual(["garden", "parking", "pool"]);
+    expect(p.site.elements.map((e) => e.type).filter((t) => t !== "parking").sort()).toEqual(["garden", "pool"]);
+    // The car parks in the yard or in a porch under the house — never left out.
+    const cars = p.site.elements.filter((e) => e.type === "parking").length + p.floors[0].rooms.filter((r) => r.type === "parking").length;
+    expect(cars).toBe(1);
     expect(p.validation?.ok).toBe(true);
   });
 

@@ -316,9 +316,17 @@ export interface Setbacks {
   side: number;
 }
 
-/** Setbacks scale gently with plot size (typical Indian bye-law ranges). */
+/**
+ * Setbacks by frontage, in typical Indian bye-law ranges. Small plots are
+ * built close to the boundary (a 20 ft plot can't give up 6 ft to side
+ * margins); larger plots scale gently.
+ */
 export function setbacksFor(pw: number, pd: number): Setbacks {
-  const side = Math.min(3, Math.max(0.9, Math.min(pw, pd) * 0.075));
+  const frontage = Math.min(pw, pd);
+  if (frontage < 7.5) return { front: 1.0, rear: 0.6, side: 0.45 }; // up to ~24 ft
+  if (frontage < 10.5) return { front: 1.5, rear: 0.75, side: 0.6 }; // ~25–34 ft
+  if (frontage < 13.5) return { front: 1.5, rear: 0.9, side: 0.9 }; // ~35–44 ft
+  const side = Math.min(3, Math.max(0.9, frontage * 0.075));
   return { front: Math.max(1.5, side * 1.5), rear: side, side };
 }
 
